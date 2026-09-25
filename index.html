@@ -55,6 +55,9 @@ h1{
 .cta-meta{font-size:13.5px;color:var(--text-faint);font-weight:600;}
 .trust-line{margin-top:22px;font-size:13.5px;color:var(--text-faint);}
 .trust-line strong{color:var(--text-dim);font-weight:700;}
+.trust-line + .trust-line{margin-top:8px;}
+.support-link{color:var(--spark);font-weight:700;}
+.support-link:hover{text-decoration:underline;}
 
 /* ---------- feature grid ---------- */
 .section-label{
@@ -107,6 +110,7 @@ footer{padding:40px 0 56px;border-top:1px solid var(--border);}
 .foot-links{display:flex;gap:20px;font-size:13.5px;color:var(--text-faint);flex-wrap:wrap;}
 .foot-links a:hover{color:var(--text-dim);}
 .copyright{margin-top:20px;font-size:12.5px;color:var(--text-faint);}
+footer .foot-links{margin-top:14px;}
 
 @media (max-width:760px){
   .grid{grid-template-columns:1fr;}
@@ -153,6 +157,7 @@ footer{padding:40px 0 56px;border-top:1px solid var(--border);}
     </div>
 
     <p class="trust-line"><strong>Nothing leaves your phone.</strong> Every set, split and PR is stored locally — no sign-up, no cloud, no ads.</p>
+    <p class="trust-line"><a href="https://buymeacoffee.com/nirray" class="support-link">☕ Buy me a coffee</a> if TrackA'gain has been useful to you.</p>
   </section>
 
   <section class="features">
@@ -233,13 +238,12 @@ footer{padding:40px 0 56px;border-top:1px solid var(--border);}
         <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#e1ff00"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000" stroke-width="2.4" stroke-linecap="round"/></svg>
         <span>TrackA'gain</span>
       </div>
-      <div class="foot-links">
-        <a href="mailto:trackagainsupport@gmail.com">trackagainsupport@gmail.com</a>
-        <!-- EDIT ME: swap in your real Buy Me a Coffee link -->
-        <a href="https://buymeacoffee.com/YOUR_USERNAME">☕ Support this project</a>
-      </div>
     </div>
     <p class="copyright">Workout tracking, simplified by Nirbhay Raut. © 2026</p>
+    <div class="foot-links">
+      <a href="mailto:trackagainsupport@gmail.com">trackagainsupport@gmail.com</a>
+      <a href="https://buymeacoffee.com/nirray">☕ Support this project</a>
+    </div>
   </footer>
 </div>
 
