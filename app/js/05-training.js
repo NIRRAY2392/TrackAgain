@@ -126,20 +126,46 @@ function appHasAnyPrs(){ return DATA.exercises.some(e=>prMomentsForExercise(e.id
    A session qualifies when, at the same load or better:
      · at least `qualifyingSets` sets reached `repsTarget` reps, and
      · average effort is at most maxEffortToQualify (one Hard set is ok).
-   repsTarget = the programmed row's own top rep (planRow.repsMax). */
+   repsTarget = the user's "reps before more weight" setting, capped at the
+   programmed row's top rep and never below its bottom rep. */
+function repsTargetFor(repsMin, repsMax){
+  const earn = goalConfig().repsToEarnIncrease;
+  if(typeof earn !== 'number' || earn <= 0) return repsMax;
+  return Math.max(repsMin, Math.min(repsMax, earn));
+}
 function roundToPlate(weight){
   const step = TRAINING.load.plateStepKg;
   return Math.round(weight/step)*step;
+}
+/* Smallest weight change the equipment allows (dumbbell 1, cable 1.25...). */
+function loadStepFor(exercise){
+  const step = (TRAINING.load.minIncrementByEquip||{})[equipOf(exercise)];
+  return step > 0 ? step : TRAINING.load.plateStepKg;
 }
 function nextLoadFor(exercise, currentWeight){
   const pct = LOWER_BODY_MUSCLES.has(primaryOf(exercise)) ? TRAINING.load.increasePctLower : TRAINING.load.increasePctUpper;
   const byEquip = TRAINING.load.minIncrementByEquip || {};
   const minInc = byEquip[equipOf(exercise)] != null ? byEquip[equipOf(exercise)] : TRAINING.load.minIncrementKg;
   if(minInc<=0) return currentWeight;
-  const raw = currentWeight * pct/100;
-  const step = TRAINING.load.plateStepKg;
-  const bump = Math.max(minInc, raw);
-  return Math.round((currentWeight + bump)/step)*step;
+  const step = loadStepFor(exercise);
+  const bump = Math.max(minInc, currentWeight * pct/100);
+  const next = roundTo(Math.round((currentWeight + bump)/step)*step, 2);
+  if(next >= currentWeight + minInc - 1e-9) return next;
+  return roundTo(Math.ceil((currentWeight + minInc)/step - 1e-9)*step, 2);
+}
+/* The load to move to after reps fell below the range. Uses the same
+   one-rep-max estimate as PRs to aim for the bottom of the range, rounds down
+   to the equipment step and always moves at least one step. Assisted
+   exercises get more assistance instead. */
+function lowerLoadFor(exercise, weight, reps, targetReps, assisted){
+  if(assisted){
+    const step = TRAINING.load.assistanceStepKg;
+    return roundTo(weight + step*Math.max(1, Math.ceil((targetReps-reps)/2)), 2);
+  }
+  const step = loadStepFor(exercise);
+  const ideal = weight * (1 + reps/30) / (1 + targetReps/30);
+  const down = Math.floor(ideal/step + 1e-9) * step;
+  return Math.max(0, roundTo(Math.min(down, weight - step), 2));
 }
 function mostCommonWeight(sets, assisted){
   const freq = {};
@@ -167,7 +193,7 @@ const FIRST_SESSION_COPY = {
 };
 
 /* Returns everything the UI needs to describe "what should I do today?".
-   state: no_history | build | ready | accepted | deferred */
+   state: no_history | build | lower | ready | accepted | deferred */
 function progressionFor(exerciseId, planRow){
   const ex = getExercise(exerciseId);
   const metric = metricOf(ex);
@@ -210,7 +236,7 @@ function progressionFor(exerciseId, planRow){
 
   const assisted = metric==='assisted';
   const referenceWeight = mostCommonWeight(lastNormal, assisted);
-  const repsTarget = repsMax;
+  const repsTarget = repsTargetFor(repsMin, repsMax);
   const setsNeeded = Math.min(goal.qualifyingSets, planRow ? planRow.sets : goal.qualifyingSets);
   status.referenceWeight = referenceWeight;
   status.repsTarget = repsTarget;
@@ -239,6 +265,18 @@ function progressionFor(exerciseId, planRow){
     }
   } else {
     const bestReps = Math.max(...lastNormal.map(s=>s.reps||0));
+    const atRef = lastNormal.filter(s=> Math.abs((s.weight||0) - referenceWeight) < 0.01);
+    const bestAtRef = Math.max(...atRef.map(s=>s.reps||0));
+    status.progressText = `Overload progress: ${qualifying}/${goal.sessionsRequired} qualifying sessions`;
+    if(bestAtRef > 0 && bestAtRef < repsMin){
+      status.state = 'lower';
+      status.lowerWeight = lowerLoadFor(ex, referenceWeight, bestAtRef, repsMin, assisted);
+      status.headline = assisted
+        ? `Add assistance: ${status.lowerWeight}${units()} assist for ${repsMin}–${repsMax} reps`
+        : `Drop to ${status.lowerWeight}${units()} for ${repsMin}–${repsMax} reps`;
+      status.note = `Last time: ${referenceWeight}${units()}${assisted?' assist':''} for ${bestAtRef} reps, below your ${repsMin}–${repsMax} range. For ${goal.label}, pick a weight you can do at least ${repsMin} times.`;
+      return applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, repsMin, repsMax);
+    }
     status.headline = assisted
       ? `Stay at ${referenceWeight}${units()} assist for ${repsMin}–${repsMax} reps`
       : `Stay at ${referenceWeight}${units()} for ${repsMin}–${repsMax} reps`;
@@ -247,10 +285,12 @@ function progressionFor(exerciseId, planRow){
       : (qualifying+1 >= goal.sessionsRequired)
         ? `One more session like that and you've earned the increase.`
         : `Need ${goal.sessionsRequired-qualifying} more clean session${goal.sessionsRequired-qualifying>1?'s':''} at ${repsTarget}+ reps.`;
-    status.progressText = `Overload progress: ${qualifying}/${goal.sessionsRequired} qualifying sessions`;
   }
+  return applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, repsMin, repsMax);
+}
 
-  /* user's own decision for today wins over the suggestion */
+/* The user's own decision for today wins over the suggestion. */
+function applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, repsMin, repsMax){
   const plan = loadPlanFor(exerciseId);
   if(plan && typeof plan.weight === 'number'){
     status.state = 'accepted';

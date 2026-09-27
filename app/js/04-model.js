@@ -148,15 +148,6 @@ function syncActiveWorkoutFromSplit(opts){
   log.planName = routine.name || 'Workout';
   return true;
 }
-function selectCurrentSplit(key){
-  if(!DATA.splits[key] || DATA.activeSplit===key) return;
-  DATA.activeSplit = key;
-  syncActiveWorkoutFromSplit({replaceAll:true});
-  saveData(DATA);
-  const label = DATA.splits[key].label;
-  showToast(activeWorkoutLog() ? `${label} is the current split. Today’s workout updated.` : `${label} is the current split`);
-  renderApp();
-}
 function commitExerciseToSplit(log, exerciseId){
   const dayKey = log.dayKey || weekdayKey();
   const day = splitDays()[dayKey];

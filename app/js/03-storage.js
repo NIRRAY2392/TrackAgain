@@ -28,7 +28,7 @@ function guessEquipment(text){
 }
 function defaultPlanSets(){
   const n = DATA && DATA.settings && parseInt(DATA.settings.defaultPlanSets, 10);
-  return Math.min(8, Math.max(1, n || 3));
+  return Math.min(8, Math.max(1, n || 2));
 }
 function newPlanRow(exerciseId, opts){
   const ex = getExercise(exerciseId);
@@ -72,7 +72,7 @@ function seedSplits(exercises){
   };
 }
 
-/* Built-in preset: God's Plan (PPL-UL). Added once via migrate if missing. */
+/* God's Plan (PPL-UL): the split new installs start on, and a built-in preset. */
 function godsPlanRow(exercises, name, sets, repsMin, repsMax, restSeconds, notes, supersetId){
   const ex = exercises.find(x=>x.name===name);
   if(!ex) return null;
@@ -87,67 +87,112 @@ function buildGodsPlanSplit(exercises){
   const friArms = 'godsplan-fri-arms';
   const days = {
     mon:{name:'Chest & Triceps', exercises:[
-      R('Dumbbell Press',3,8,10,120,wu(10)),
-      R('Incline Dumbbell Press',3,8,10,90,wu(10)),
-      R('Pec Deck',3,12,15,60,wu(12)),
-      R('Triceps Pushdown',3,10,12,60,wu(12)),
+      R('Dumbbell Press',2,8,10,120,wu(10)),
+      R('Incline Dumbbell Press',2,8,10,90,wu(10)),
+      R('Pec Deck',2,12,15,60,wu(12)),
+      R('Triceps Pushdown',2,10,12,60,wu(12)),
       R('Overhead Triceps Extension',2,10,12,60,'Cable or dumbbell')
     ].filter(Boolean)},
     tue:{name:'Back & Biceps', exercises:[
-      R('Lat Pulldown',3,8,10,120,wu(10)),
-      R('Seated Cable Row',3,8,10,90,wu(10)),
-      R('Hyperextension',3,12,15,60,wu(10)+' · weighted'),
-      R('Incline Dumbbell Curl',3,10,12,60,wu(10)+' · seated'),
+      R('Lat Pulldown',2,8,10,120,wu(10)),
+      R('Seated Cable Row',2,8,10,90,wu(10)),
+      R('Hyperextension',2,12,15,60,wu(10)+' · weighted'),
+      R('Incline Dumbbell Curl',2,10,12,60,wu(10)+' · seated'),
       R('Hammer Curl',2,10,12,45,null),
       R('Preacher Curl',2,10,12,45,null)
     ].filter(Boolean)},
     wed:{name:'Legs & Shoulders', exercises:[
-      R('Leg Press',3,10,12,120,wu(10)),
-      R('Leg Curl',3,10,12,90,wu(10)+' · seated or lying'),
-      R('Leg Extension',3,10,12,60,wu(10)),
-      R('Machine Shoulder Press',3,8,10,90,wu(10)+' · or dumbbells'),
+      R('Leg Press',2,10,12,120,wu(10)),
+      R('Leg Curl',2,10,12,90,wu(10)+' · seated or lying'),
+      R('Leg Extension',2,10,12,60,wu(10)),
+      R('Machine Shoulder Press',2,8,10,90,wu(10)+' · or dumbbells'),
       R('Lateral Raise',2,12,15,45,'Dumbbell or cable'),
       R('Rear Delt Fly',2,12,15,45,'Machine or dumbbell'),
       R('Incline Treadmill Walk',1,600,900,0,'10–15 min, easy-moderate incline (5–8%)')
     ].filter(Boolean)},
     thu:{name:'Core & Cardio', exercises:[
-      R('Crunch',3,15,20,45,wu(15)),
-      R('Hanging Leg Raise',3,12,15,45,wu(12)+' · lying or hanging'),
-      R('Russian Twist',3,15,20,45,wu(15)+' · per side, use a plate'),
+      R('Crunch',2,15,20,45,wu(15)),
+      R('Hanging Leg Raise',2,12,15,45,wu(12)+' · lying or hanging'),
+      R('Russian Twist',2,15,20,45,wu(15)+' · per side, use a plate'),
       R('Plank',2,45,60,45,'Hold'),
       R('Incline Treadmill Walk',1,1200,1500,0,'20–25 min, conversational pace')
     ].filter(Boolean)},
     fri:{name:'Upper', exercises:[
-      R('Incline Barbell Press',3,6,8,120,wu(8)),
-      R('Pull-up',3,8,10,120,wu(8)+' · add weight if easy, or Lat Pulldown'),
-      R('Dumbbell Shoulder Press',3,8,10,90,wu(8)+' · seated'),
-      R('Chest-Supported Row',3,8,10,90,wu(8)),
+      R('Incline Barbell Press',2,6,8,120,wu(8)),
+      R('Pull-up',2,8,10,120,wu(8)+' · add weight if easy, or Lat Pulldown'),
+      R('Dumbbell Shoulder Press',2,8,10,90,wu(8)+' · seated'),
+      R('Chest-Supported Row',2,8,10,90,wu(8)),
       R('Lateral Raise',2,12,15,45,null),
       R('Face Pull',2,15,15,45,null),
       R('EZ-Bar Curl',2,10,12,45,'Superset with Rope Pushdown',friArms),
       R('Rope Pushdown',2,10,12,45,'Superset with EZ-Bar Curl',friArms)
     ].filter(Boolean)},
     sat:{name:'Lower', exercises:[
-      R('Front Squat',3,6,8,150,wu(8)+' · or trap bar deadlift'),
-      R('Romanian Deadlift',3,8,10,120,wu(8)),
-      R('Bulgarian Split Squat',3,8,10,90,wu(8)+' · per leg'),
-      R('Seated Leg Curl',3,10,12,60,wu(10)+' · or lying'),
+      R('Front Squat',2,6,8,150,wu(8)+' · or trap bar deadlift'),
+      R('Romanian Deadlift',2,8,10,120,wu(8)),
+      R('Bulgarian Split Squat',2,8,10,90,wu(8)+' · per leg'),
+      R('Seated Leg Curl',2,10,12,60,wu(10)+' · or lying'),
       R('Standing Calf Raise',2,12,15,45,null),
       R('Cable Crunch',2,12,15,60,'or Hanging Leg Raise')
     ].filter(Boolean)},
     sun:{name:'Rest', exercises:[]}
   };
-  return { label:'PPL + UL', days };
+  return { label:"God's Plan", days };
 }
-function ensureGodsPlanPreset(data){
+
+/* Presets every install gets. Deleting one records its id in
+   settings.dismissedPresets so migrate doesn't add it back. */
+const BUILTIN_PRESETS = [
+  {id:'builtin-gods-plan', name:"God's Plan", subtitle:'PPL-UL used by Nirbhay Raut', build:ex=> buildGodsPlanSplit(ex)},
+  {id:'builtin-ppl',       name:'PPL',        subtitle:'Push, pull, legs, twice a week',        build:ex=> seedSplits(ex).ppl},
+  {id:'builtin-pplul',     name:'PPL + UL',   subtitle:'Push, pull, legs, core, upper, lower',  build:ex=> seedSplits(ex).pplul}
+];
+const PRESETS_VERSION = 2;
+function ensureBuiltinPresets(data){
   data.presets = data.presets || [];
-  data.settings = data.settings || {};
-  if(data.settings.dismissedGodsPlan) return;
-  if(data.presets.some(p=>p.id==='builtin-gods-plan' || (p.name||'').trim().toLowerCase()==="god's plan")) return;
-  const split = buildGodsPlanSplit(data.exercises);
-  data.presets.unshift({
-    id:'builtin-gods-plan', name:"God's Plan", subtitle:'PPL-UL', splitKey:'pplul',
-    split, savedAt:Date.now()
+  const s = data.settings = data.settings || {};
+  const dismissed = new Set(Array.isArray(s.dismissedPresets) ? s.dismissedPresets : []);
+  BUILTIN_PRESETS.forEach(b=>{
+    if(dismissed.has(b.id)) return;
+    const existing = data.presets.find(p=> p.id===b.id || (p.name||'').trim().toLowerCase()===b.name.toLowerCase());
+    if(!existing){
+      data.presets.push({id:b.id, name:b.name, subtitle:b.subtitle, split:b.build(data.exercises), savedAt:Date.now()});
+    } else if(existing.id==='builtin-gods-plan' && (s.presetsVersion||0) < PRESETS_VERSION){
+      existing.split = b.build(data.exercises);
+      if(!existing.subtitle || existing.subtitle==='PPL-UL') existing.subtitle = b.subtitle;
+    }
+  });
+  s.presetsVersion = PRESETS_VERSION;
+}
+function dismissBuiltinPreset(preset){
+  const s = DATA.settings;
+  const ids = new Set(Array.isArray(s.dismissedPresets) ? s.dismissedPresets : []);
+  BUILTIN_PRESETS.forEach(b=>{
+    if(preset.id===b.id || (preset.name||'').trim().toLowerCase()===b.name.toLowerCase()) ids.add(b.id);
+  });
+  s.dismissedPresets = [...ids];
+}
+
+/* The app keeps one weekly split. Older saves had a PPL / PPL + UL switcher:
+   the split not in use is dropped if it's still the untouched generic one,
+   otherwise it's kept as a preset so no edits are lost. */
+function splitSignature(split){
+  return JSON.stringify(DAY_KEYS.map(dk=>{
+    const day = split.days[dk] || {name:'Rest', exercises:[]};
+    return [day.name, (day.exercises||[]).map(r=>[r.exerciseId, r.sets, r.repsMin, r.repsMax])];
+  }));
+}
+function collapseToSingleSplit(data){
+  const keys = Object.keys(data.splits);
+  if(keys.length <= 1) return;
+  const generic = seedSplits(data.exercises);
+  keys.filter(k=> k!==data.activeSplit).forEach(k=>{
+    const split = data.splits[k];
+    const untouched = generic[k] && splitSignature(generic[k])===splitSignature(split);
+    if(!untouched){
+      data.presets.push({id:uid(), name:`${split.label} (your split)`, subtitle:'Saved from your earlier split', split:clone(split), savedAt:Date.now()});
+    }
+    delete data.splits[k];
   });
 }
 
@@ -158,13 +203,14 @@ function defaultSettings(){
     overload:{ repsToEarnIncrease:goal.repsToEarnIncrease, sessionsRequired:goal.sessionsRequired },
     restDefaultMinutes:3, restNotify:true, restVibrate:true,
     restSetupAsked:false, restBatteryHintDismissed:false,
-    weighInDay:'mon', weightReminderSnoozedOn:null, dismissedGodsPlan:false,
-    defaultPlanSets:3, demoSeeded:false };
+    weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], presetsVersion:0,
+    defaultPlanSets:2 };
 }
+function defaultSplits(exercises){ return { main: buildGodsPlanSplit(exercises) }; }
 function defaultData(){
   const exercises = seedExercises();
-  const data = { settings:defaultSettings(), exercises, splits:seedSplits(exercises), activeSplit:'ppl', logs:[], progress:{}, bodyWeight:[], presets:[] };
-  ensureGodsPlanPreset(data);
+  const data = { settings:defaultSettings(), exercises, splits:defaultSplits(exercises), activeSplit:'main', logs:[], progress:{}, bodyWeight:[], presets:[] };
+  ensureBuiltinPresets(data);
   return data;
 }
 
@@ -172,12 +218,12 @@ function defaultData(){
    logs and splits. Every new field gets a default here. */
 function migrate(data){
   if(data.routineDays && !data.splits){
-    data.splits = { ppl:{ label:'PPL', days:data.routineDays }, pplul: seedSplits(data.exercises).pplul };
+    data.splits = { ppl:{ label:'PPL', days:data.routineDays } };
     data.activeSplit = 'ppl';
     delete data.routineDays;
   }
-  if(!data.splits) data.splits = seedSplits(data.exercises);
-  if(!data.activeSplit || !data.splits[data.activeSplit]) data.activeSplit = 'ppl';
+  if(!data.splits || !Object.keys(data.splits).length) data.splits = defaultSplits(data.exercises);
+  if(!data.activeSplit || !data.splits[data.activeSplit]) data.activeSplit = Object.keys(data.splits)[0];
   if(!data.progress) data.progress = {};
   if(!Array.isArray(data.presets)) data.presets = [];
   data.presets = data.presets.filter(p=>p && p.split && p.split.days);
@@ -185,7 +231,7 @@ function migrate(data){
     if(!p.id) p.id = uid();
     if(typeof p.name !== 'string' || !p.name.trim()) p.name = 'Untitled preset';
     if(typeof p.subtitle !== 'string') p.subtitle = '';
-    if(!p.splitKey || !data.splits[p.splitKey]) p.splitKey = data.activeSplit || 'ppl';
+    delete p.splitKey;
   });
 
   const s = data.settings = data.settings || {};
@@ -202,9 +248,11 @@ function migrate(data){
   if(typeof s.restSetupAsked !== 'boolean') s.restSetupAsked = false;
   if(typeof s.restBatteryHintDismissed !== 'boolean') s.restBatteryHintDismissed = false;
   if(!DAY_KEYS.includes(s.weighInDay)) s.weighInDay = 'mon';
-  if(typeof s.dismissedGodsPlan !== 'boolean') s.dismissedGodsPlan = false;
-  if(typeof s.defaultPlanSets !== 'number' || s.defaultPlanSets<1 || s.defaultPlanSets>8) s.defaultPlanSets = 3;
-  if(typeof s.demoSeeded !== 'boolean') s.demoSeeded = false;
+  if(!Array.isArray(s.dismissedPresets)) s.dismissedPresets = [];
+  if(s.dismissedGodsPlan && !s.dismissedPresets.includes('builtin-gods-plan')) s.dismissedPresets.push('builtin-gods-plan');
+  delete s.dismissedGodsPlan;
+  if(typeof s.presetsVersion !== 'number') s.presetsVersion = 0;
+  if(typeof s.defaultPlanSets !== 'number' || s.defaultPlanSets<1 || s.defaultPlanSets>8) s.defaultPlanSets = 2;
 
   if(!Array.isArray(data.bodyWeight)) data.bodyWeight = [];
   data.bodyWeight = data.bodyWeight.filter(e=>e && typeof e.weight==='number' && e.date);
@@ -327,7 +375,8 @@ function migrate(data){
       });
     });
   });
-  ensureGodsPlanPreset(data);
+  collapseToSingleSplit(data);
+  ensureBuiltinPresets(data);
   return data;
 }
 
@@ -378,55 +427,20 @@ let setIndex = null;
 let dataReady = false;
 let DATA = loadData();
 dataReady = true;
-function demoExerciseId(name){
-  const ex = DATA.exercises.find(e=>(e.name||'')===name);
-  return ex ? ex.id : null;
-}
-function seedDemoHistory(force){
-  if(!DATA || !DATA.settings || (DATA.settings.demoSeeded && !force)) return;
-  const bench = demoExerciseId('Bench Press');
-  const squat = demoExerciseId('Squat');
-  const row = demoExerciseId('Barbell Row');
-  const ohp = demoExerciseId('Overhead Press');
-  const curl = demoExerciseId('Barbell Curl');
-  if(!bench || !squat || !row) return;
-  const mkSet = (exerciseId, ts, weight, reps, extra)=>{
-    extra = extra || {};
-    return {id:uid(), exerciseId, difficulty:extra.hard?'hard':'med', intent:null, ts, isPR:!!extra.pr, isDropSet:false, isWarmup:false, weight, reps};
-  };
-  const mkLog = (date, name, blocks)=>{
-    const day = parseDateKey(date);
-    const startedAt = day.getTime() + 18*3600*1000;
-    const sets = [], plan = [];
-    blocks.forEach(b=>{
-      if(!b.id) return;
-      plan.push({exerciseId:b.id, sets:b.target||3, repsMin:8, repsMax:12, rpe:null, notes:'', restSeconds:null, supersetId:null, oftenDoneAsDropSet:false, sessionOnly:false});
-      (b.sets||[]).forEach((s,i)=> sets.push(mkSet(b.id, startedAt+(i+1)*4*60000, s[0], s[1], s[2])));
-    });
-    return {id:'demo-'+date, date, dayKey:weekdayKey(day), sets, active:false, completed:true,
-      startedAt, endedAt:startedAt+55*60000, elapsedMs:48*60000, timerRunningSince:null,
-      plan, planName:name, queued:[], hiddenExerciseIds:[]};
-  };
-  const pack = [
-    mkLog('2026-09-26','Push',[{id:bench,target:3,sets:[[80,8],[82.5,8],[82.5,7],[80,6]]},{id:ohp||bench,target:3,sets:[[45,10],[45,9],[45,8]]}]),
-    mkLog('2026-09-23','Pull',[{id:row,target:3,sets:[[70,10],[70,9],[70,8]]},{id:curl||row,target:3,sets:[[25,12],[25,11],[25,10]]}]),
-    mkLog('2026-09-16','Legs',[{id:squat,target:3,sets:[[100,6],[100,6],[100,5,{hard:true,pr:true}]]}]),
-    mkLog('2026-09-08','Push',[{id:bench,target:3,sets:[[77.5,9],[77.5,8],[77.5,8]]}]),
-    mkLog('2026-08-19','Pull',[{id:row,target:3,sets:[[67.5,10],[67.5,10],[67.5,9]]}]),
-    mkLog('2026-08-04','Legs',[{id:squat,target:3,sets:[[95,8],[95,7],[95,7]]}]),
-    mkLog('2026-03-12','Push',[{id:bench,target:3,sets:[[70,10],[70,9],[70,9]]}]),
-    mkLog('2025-12-18','Pull',[{id:row,target:3,sets:[[60,10],[60,10],[60,9]]}]),
-    mkLog('2025-07-09','Legs',[{id:squat,target:3,sets:[[80,8],[80,8],[80,7]]}])
-  ];
-  if(!Array.isArray(DATA.logs)) DATA.logs = [];
-  pack.forEach(log=>{
-    if(!DATA.logs.some(l=>l && (l.id===log.id || (l.date===log.date && l.sets && l.sets.length)))) DATA.logs.push(log);
-  });
-  DATA.bodyWeight = DATA.bodyWeight || [];
-  [['2026-09-21',78.2],['2026-09-14',78.6],['2026-08-17',79.1],['2025-12-15',80.4]].forEach(([date,weight])=>{
-    if(!DATA.bodyWeight.some(e=>e && e.date===date)) DATA.bodyWeight.push({id:'demo-bw-'+date, date, weight, note:'demo'});
-  });
-  DATA.settings.demoSeeded = true;
+/* Older builds seeded sample workouts (ids "demo-<date>") and weigh-ins
+   ("demo-bw-<date>"). Remove them and re-rank PRs without them. Runs from
+   §10 because recomputePRs lives in §5. */
+function purgeDemoData(){
+  const isDemo = id=> typeof id==='string' && id.startsWith('demo-');
+  const demoLogs = DATA.logs.filter(l=> isDemo(l.id));
+  const demoWeights = DATA.bodyWeight.filter(e=> isDemo(e.id));
+  const hadFlag = 'demoSeeded' in DATA.settings;
+  if(!demoLogs.length && !demoWeights.length && !hadFlag) return;
+  const touched = new Set(demoLogs.flatMap(l=> l.sets.map(s=> s.exerciseId)));
+  DATA.logs = DATA.logs.filter(l=> !isDemo(l.id));
+  DATA.bodyWeight = DATA.bodyWeight.filter(e=> !isDemo(e.id));
+  delete DATA.settings.demoSeeded;
+  touched.forEach(id=> recomputePRs(id));
   saveData(DATA);
 }
 function buildSetIndex(){

@@ -389,26 +389,23 @@ function renderActiveWorkout(){
       if(g.type==='superset' && g.members.length>=2){
         const roundsDone = Math.min(...g.members.map(m=>workingSetsInLogFor(log, m.row.exerciseId).length));
         const roundsTarget = Math.max(...g.members.map(m=>m.row.sets||0));
-        const canRepeat = g.members.every(m=>setsInLogFor(log, m.row.exerciseId).length);
         const box = el(`
           <div class="superset-wrap">
             <div class="ss-label"><span class="badge-ss">${icon('link',12)} Superset</span><button class="btn ghost" data-ungroup style="margin-left:auto;padding:2px 6px;font-size:11.5px;">Ungroup</button></div>
             <p class="ss-round">${roundsDone} of ${roundsTarget} round${roundsTarget===1?'':'s'} logged</p>
             <div class="ss-actions" style="margin-top:0;margin-bottom:12px;">
-              ${canRepeat ? '<button class="btn secondary" data-same-round>Same round</button>' : ''}
               <button class="btn add-set" data-log-round>${icon('plus',18)} Log round</button>
             </div>
             <div data-members></div>
           </div>`);
         const membersBox = q('[data-members]',box);
-        g.members.forEach(m=> membersBox.appendChild(workoutExerciseCard(m.row, m.idx, log, {inSuperset:true})));
+        const groupIds = g.members.map(m=> m.row.exerciseId);
+        g.members.forEach(m=> membersBox.appendChild(workoutExerciseCard(m.row, m.idx, log, {inSuperset:true, groupIds})));
         q('[data-ungroup]',box).onclick = ()=>{
           g.members.forEach(m=> m.row.supersetId = null);
           saveData(DATA); renderApp();
         };
-        q('[data-log-round]',box).onclick = ()=> openSupersetLogSheet(g.members);
-        const sameRound = q('[data-same-round]',box);
-        if(sameRound) sameRound.onclick = ()=> repeatSupersetRound(g.members);
+        q('[data-log-round]',box).onclick = ()=> logSupersetRound(g.members, log);
         wrap.appendChild(box);
       } else {
         const members = g.type==='superset' ? g.members : [{row:g.row, idx:g.idx}];
@@ -482,6 +479,73 @@ function openSupersetPickerSheet(plan){
   draw();
 }
 
+/* Keys are `${log.date}:${exerciseId}` so lists collapse and drafts reset each day. */
+const openSetLists = new Set();
+const setDrafts = new Map();
+/* {setId, stage, backup}: the row loaded into the steppers, and the draft to restore afterwards. */
+const editingSets = new Map();
+/* Cards reopened by hand after being finished or left behind; cleared whenever a set is logged. */
+const expandedCards = new Set();
+
+/* Values in the card's inline logger. They carry over between sets and
+   follow the planned load when the overload suggestion is accepted. */
+function setDraftFor(key, planRow, sample, plannedWeight){
+  let d = setDrafts.get(key);
+  if(!d){
+    d = {
+      weight: sample && sample.weight!=null ? sample.weight : 0,
+      reps: sample && sample.reps ? sample.reps : (planRow.repsMin || 8),
+      duration: sample && sample.duration ? sample.duration : 30,
+      effort: (sample && sample.difficulty) || 'med',
+      warmup: false,
+    };
+    setDrafts.set(key, d);
+  }
+  if(plannedWeight!=null && plannedWeight!==d.planW) d.weight = plannedWeight;
+  d.planW = plannedWeight;
+  return d;
+}
+
+function stepperHtml(field, value, unit, label){
+  return `
+    <div class="stp" data-field="${field}">
+      <button type="button" class="stp-btn" data-dec aria-label="Less ${label}">${icon('minus',16)}</button>
+      <label class="stp-val"><input type="number" inputmode="${field==='weight'?'decimal':'numeric'}" value="${value}" aria-label="${label}"><span>${unit}</span></label>
+      <button type="button" class="stp-btn" data-inc aria-label="More ${label}">${icon('plus',16)}</button>
+    </div>`;
+}
+
+/* Rows carry data-stage: '' for a whole normal set, otherwise the drop stage index.
+   Drop stages after the first sit indented under their set. */
+function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
+  let working = 0;
+  const isEditing = (set, stage)=> editing && editing.setId===set.id && editing.stage===stage;
+  const rows = doneSets.map((set,i)=>{
+    if(!set.isWarmup) working++;
+    const bonus = !set.isWarmup && working > targetSets;
+    const mainStage = set.isDropSet ? 0 : null;
+    const mainVal = set.isDropSet ? setValueText({...set.stages[0]}, metric) : setValueText(set, metric);
+    let html = `
+      <div class="ts-row${bonus?' bonus':''}${set.isWarmup?' warmup':''}${isEditing(set, mainStage)?' editing':''}" data-edit-set="${set.id}" data-stage="${mainStage==null?'':mainStage}" role="button" tabindex="0" aria-label="Edit set ${i+1}">
+        <span class="ts-num">${i+1}</span>
+        <span class="ts-val">${escapeHtml(mainVal)}${set.isPR?' <span class="trophy">🏆</span>':''}${set.intent==='strength'?' <span class="ts-tag">Strength</span>':''}${set.isDropSet?' <span class="ts-tag">Drop set</span>':''}</span>
+        <span class="ts-feel">${set.isWarmup?'Warm-up':effortLabel(set.difficulty)}</span>
+        <button type="button" class="ts-del" data-del-set="${set.id}" data-stage="" aria-label="Delete set ${i+1}">${icon('x',15)}</button>
+      </div>`;
+    if(set.isDropSet) set.stages.slice(1).forEach((stage,k)=>{
+      html += `
+        <div class="ts-row ts-sub${isEditing(set, k+1)?' editing':''}" data-edit-set="${set.id}" data-stage="${k+1}" role="button" tabindex="0" aria-label="Edit drop ${k+1} of set ${i+1}">
+          <span class="ts-branch" aria-hidden="true"></span>
+          <span class="ts-val">${escapeHtml(setValueText({...stage}, metric))}</span>
+          <span class="ts-feel">Drop ${k+1}</span>
+          <button type="button" class="ts-del" data-del-set="${set.id}" data-stage="${k+1}" aria-label="Delete drop ${k+1}">${icon('x',15)}</button>
+        </div>`;
+    });
+    return html;
+  });
+  return (showAll ? rows : rows.slice(-2)).join('');
+}
+
 /* One exercise card inside an active workout. */
 function workoutExerciseCard(planRow, index, log, opts){
   opts = opts || {};
@@ -502,12 +566,56 @@ function workoutExerciseCard(planRow, index, log, opts){
   const lastToday = doneSets.filter(s=>!s.isDropSet).slice(-1)[0];
   const sample = lastToday || (lastBits && lastBits.set);
   const planned = loadPlanFor(planRow.exerciseId);
-  const weightVal = (metric==='weight_reps'||metric==='assisted')
-    ? (planned && planned.weight!=null ? planned.weight : (sample && sample.weight!=null ? sample.weight : '—'))
-    : (metric==='time' ? (sample && sample.duration!=null ? sample.duration+'s' : '—') : '—');
-  const repsVal = metric==='time' ? 'hold' : (sample && sample.reps!=null ? sample.reps : `${planRow.repsMin}–${planRow.repsMax}`);
-  const feelVal = effortLabel(sample && sample.difficulty ? sample.difficulty : 'med');
-  const openLog = ()=> openLogSetSheet({exerciseId:planRow.exerciseId, planRow});
+  const listKey = `${log.date}:${planRow.exerciseId}`;
+  const showAll = openSetLists.has(listKey);
+  const draft = setDraftFor(listKey, planRow, sample, planned && planned.weight!=null ? planned.weight : null);
+  const refText = lastBits ? `Last time ${lastBits.text}` : doneSets.length ? '' : 'First time';
+
+  let editing = editingSets.get(listKey) || null;
+  let editSet = editing && doneSets.find(s=>s.id===editing.setId);
+  if(editing && (!editSet || (editing.stage!=null && !(editSet.isDropSet && editSet.stages[editing.stage])))){
+    Object.assign(draft, editing.backup);
+    editingSets.delete(listKey);
+    editing = null; editSet = null;
+  }
+  const editIndex = editSet ? doneSets.indexOf(editSet) + 1 : 0;
+  const editTitle = !editing ? ''
+    : editing.stage ? `Editing set ${editIndex} · drop ${editing.stage}`
+    : `Editing set ${editIndex}`;
+  const isDone = working.length >= planRow.sets;
+  const lastLogged = log.sets[log.sets.length-1];
+  const ownIds = opts.groupIds || [planRow.exerciseId];
+  const movedOn = doneSets.length > 0 && !!lastLogged && !ownIds.includes(lastLogged.exerciseId);
+  const collapsed = !editing && !expandedCards.has(listKey) && (isDone || movedOn);
+
+  const todayBox = doneSets.length ? `
+    <div class="today-sets">
+      <div class="ts-head">
+        <span class="ts-title">Today</span>
+        ${doneSets.length>2 ? `<button type="button" class="ts-more" data-toggle-sets>${showAll?'Show less':`Show all ${doneSets.length}`}</button>` : ''}
+      </div>
+      ${todaySetRowsHtml(doneSets, metric, planRow.sets, showAll, editing)}
+    </div>` : '';
+
+  const wStep = metric==='assisted' ? TRAINING.load.assistanceStepKg : loadStepFor(ex);
+  const steppers = metric==='time' ? stepperHtml('duration', draft.duration, 'sec', 'seconds')
+    : metric==='reps_only' ? stepperHtml('reps', draft.reps, 'reps', 'reps')
+    : stepperHtml('weight', draft.weight, metric==='assisted'?'kg assist':units(), metric==='assisted'?'assistance':'weight')
+      + stepperHtml('reps', draft.reps, 'reps', 'reps');
+  const showWarmup = !(editSet && editSet.isDropSet);
+  const nextSet = `
+    <div class="next-set${editing?' is-editing':''}">
+      <div class="ns-head">
+        ${editing
+          ? `<span class="ns-title">${editTitle}</span>`
+          : `<span class="ns-title">Set ${doneSets.length+1}${refText ? `<span class="ns-ref"> · ${escapeHtml(refText)}</span>` : ''}</span>`}
+        ${showWarmup ? `<label class="ns-wu"><input type="checkbox" data-wu ${draft.warmup?'checked':''}><span>Warm-up</span></label>` : ''}
+      </div>
+      <div class="ns-steps${metric==='time'||metric==='reps_only'?' single':''}">${steppers}</div>
+      <div class="seg" role="radiogroup" aria-label="How hard did it feel">
+        ${['easy','med','hard'].map(k=>`<button type="button" role="radio" data-eff="${k}" aria-checked="${draft.effort===k}" class="${draft.effort===k?'on':''}">${effortLabel(k)}</button>`).join('')}
+      </div>
+    </div>`;
 
   const card = el(`
     <div class="hit-card ${working.length>=planRow.sets ? 'done' : ''}" style="--i:${index||0}">
@@ -527,41 +635,132 @@ function workoutExerciseCard(planRow, index, log, opts){
       </div>
       ${planRow.notes ? `<p class="faint small" style="margin-top:8px;">${escapeHtml(planRow.notes)}</p>` : ''}
       ${planRow.oftenDoneAsDropSet ? `<p class="hint-oftendrop">Often done as a drop set</p>` : ''}
-      ${setDotsHtml(working.length, planRow.sets)}
-      ${progressMsg ? `<p class="small ${progressCls}">${progressMsg}</p>` : ''}
-      <div class="hit-last"><strong>Last logged</strong>${lastToday ? `${escapeHtml(setValueText(lastToday, metric))} · Today` : (lastBits ? `${escapeHtml(lastBits.text)} · ${escapeHtml(relativeDay(lastBits.date))}` : 'No previous set yet')}</div>
-      <div data-progression></div>
-      ${opts.inSuperset ? '' : `<div class="hit-quick" data-quick>
-        <div class="hit-field" data-log><span class="lbl">${metric==='assisted'?'assist':(metric==='time'?'time':'weight')}</span><span class="val">${escapeHtml(String(weightVal))}</span></div>
-        <div class="hit-field" data-log><span class="lbl">${metric==='time'?'secs':'reps'}</span><span class="val">${escapeHtml(String(repsVal))}</span></div>
-        <div class="hit-field" data-log><span class="lbl">feel</span><span class="val">${escapeHtml(feelVal)}</span></div>
-      </div>`}
-      <div data-sets style="margin-top:${doneSets.length?'10px':'0'}"></div>
+      <div class="hit-prog">
+        ${setDotsHtml(working.length, planRow.sets)}
+        ${progressMsg ? `<span class="${progressCls}">${progressMsg}</span>` : ''}
+      </div>
+      ${collapsed ? '' : '<div data-progression></div>'}
+      ${todayBox}
+      ${collapsed ? '' : nextSet}
       <div class="hit-actions">
-        ${opts.inSuperset
-          ? '<button class="btn ghost" data-log style="width:100%;">Log only this</button>'
-          : `${doneSets.length ? '<button class="btn secondary" data-repeat>Same</button>' : ''}
-             <button class="btn add-set" data-log>${icon('plus',18)} Add Set</button>`}
+        ${collapsed
+          ? `<button type="button" class="btn secondary expand-btn" data-expand>${isDone ? `${icon('plus',18)} Add bonus set` : `Continue · set ${doneSets.length+1}`}</button>`
+          : editing
+          ? `<button type="button" class="btn secondary drop-btn" data-cancel-edit>Cancel</button>
+             <button type="button" class="btn add-set" data-update>${icon('check',18)} Update set</button>`
+          : `<button type="button" class="btn secondary drop-btn" data-drop>Log drop set</button>
+             <button type="button" class="btn add-set" data-log-now>${icon('plus',18)} Log set ${doneSets.length+1}</button>`}
       </div>
     </div>`);
 
-  q('[data-progression]',card).appendChild(progressionBlock(status, planRow));
+  const lastWorkSet = (metric==='weight_reps' || metric==='assisted')
+    ? doneSets.filter(s=>!s.isDropSet && !s.isWarmup).slice(-1)[0] : null;
+  const liveLower = lastWorkSet && (lastWorkSet.reps||0) > 0 && lastWorkSet.reps < planRow.repsMin;
+  if(collapsed){
+    q('[data-expand]',card).onclick = ()=>{ expandedCards.add(listKey); renderApp(); };
+  } else if(liveLower){
+    const weight = lowerLoadFor(ex, lastWorkSet.weight||0, lastWorkSet.reps, planRow.repsMin, metric==='assisted');
+    const applied = draft.weight === weight;
+    q('[data-progression]',card).appendChild(lowerAdviceBox({
+      exerciseId: planRow.exerciseId, weight, applied,
+      headline: applied ? `Next set at ${weight}${units()}${metric==='assisted'?' assist':''}`
+        : metric==='assisted' ? `Add assistance: ${weight}${units()} for the next set`
+        : `Drop to ${weight}${units()} for the next set`,
+      note: `Last set ${setValueText(lastWorkSet, metric)} is below your ${planRow.repsMin}–${planRow.repsMax} range.`,
+    }));
+  } else {
+    q('[data-progression]',card).appendChild(progressionBlock(status, planRow));
+  }
 
-  setRowsInto(q('[data-sets]',card), doneSets, metric, {
-    targetSets: planRow.sets,
-    onEdit: set=> openLogSetSheet({exerciseId:planRow.exerciseId, planRow, existingSet:set}),
-    onDelete: set=>{
-      confirmAction('Delete this set? This cannot be undone.', 'Delete', ()=>{
-        log.sets = log.sets.filter(s=>s.id!==set.id);
-        recomputePRs(planRow.exerciseId);
-        saveData(DATA); renderApp();
-      });
-    }
+  qa('[data-toggle-sets]',card).forEach(node=> node.onclick = ()=>{
+    if(showAll) openSetLists.delete(listKey); else openSetLists.add(listKey);
+    renderApp();
+  });
+  const stageOf = node=> node.dataset.stage==='' ? null : Number(node.dataset.stage);
+  const draftCopy = ()=> ({weight:draft.weight, reps:draft.reps, duration:draft.duration, effort:draft.effort, warmup:draft.warmup});
+  const endEdit = ()=>{
+    const cur = editingSets.get(listKey);
+    if(cur) Object.assign(draft, cur.backup);
+    editingSets.delete(listKey);
+  };
+  qa('[data-edit-set]',card).forEach(row=>{
+    const open = ()=>{
+      const set = doneSets.find(s=>s.id===row.dataset.editSet);
+      if(!set) return;
+      const stage = stageOf(row);
+      const prev = editingSets.get(listKey);
+      const backup = prev ? prev.backup : draftCopy();
+      const src = stage!=null ? set.stages[stage] : set;
+      Object.assign(draft, backup, pickSetValues(src), {effort:set.difficulty || 'med', warmup:!!set.isWarmup});
+      editingSets.set(listKey, {setId:set.id, stage, backup});
+      renderApp();
+    };
+    row.onclick = open;
+    row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); open(); } };
+  });
+  qa('[data-del-set]',card).forEach(btn=> btn.onclick = e=>{
+    e.stopPropagation();
+    const set = doneSets.find(s=>s.id===btn.dataset.delSet);
+    if(!set) return;
+    const stage = stageOf(btn);
+    if(editing && editing.setId===set.id) endEdit();
+    const snap = removeSetOrStage(set, stage);
+    renderApp();
+    showToast(stage==null ? 'Set deleted' : 'Drop removed', false, {label:'Undo', onClick:()=>{ restoreSet(snap); renderApp(); }});
   });
 
-  const repeatBtn = q('[data-repeat]',card);
-  if(repeatBtn) repeatBtn.onclick = ()=> repeatLastSet(planRow.exerciseId);
-  qa('[data-log]',card).forEach(btn=> btn.onclick = openLog);
+  const cancelBtn = q('[data-cancel-edit]',card);
+  if(cancelBtn) cancelBtn.onclick = ()=>{ endEdit(); renderApp(); };
+  const updateBtn = q('[data-update]',card);
+  if(updateBtn) updateBtn.onclick = ()=>{
+    const values = setValuesFrom(metric, draft);
+    if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
+    updateLoggedSet(editSet, editing.stage, values, draft.effort, draft.warmup, null);
+    endEdit();
+    showToast('Set updated');
+    renderApp();
+  };
+
+  const dropBtn = q('[data-drop]',card);
+  if(dropBtn) dropBtn.onclick = ()=>{
+    const target = doneSets.filter(s=>!s.isWarmup).slice(-1)[0];
+    if(!target){ showToast('Log a set first, then drop the weight'); return; }
+    const values = setValuesFrom(metric, draft);
+    if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
+    if(!addDropStage(target, values, draft.effort)){ showToast('A drop set can have up to 5 stages'); return; }
+    showToast('Drop logged 🔻');
+    renderApp();
+  };
+
+  const steps = {weight:{step:wStep, min:0, dp:2}, reps:{step:1, min:1, dp:0}, duration:{step:5, min:5, dp:0}};
+  qa('.stp',card).forEach(stp=>{
+    const field = stp.dataset.field, cfg = steps[field];
+    const input = q('input',stp);
+    const fit = ()=>{ input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch'; };
+    const set = v=>{ draft[field] = Math.max(cfg.min, roundTo(v, cfg.dp)); input.value = draft[field]; fit(); };
+    fit();
+    q('[data-dec]',stp).onclick = ()=> set((parseFloat(input.value)||0) - cfg.step);
+    q('[data-inc]',stp).onclick = ()=> set((parseFloat(input.value)||0) + cfg.step);
+    input.oninput = ()=>{ const v = parseFloat(input.value); if(!isNaN(v)) draft[field] = v; fit(); };
+    input.onchange = ()=> set(parseFloat(input.value)||cfg.min);
+  });
+  qa('[data-eff]',card).forEach(btn=> btn.onclick = ()=>{
+    draft.effort = btn.dataset.eff;
+    qa('[data-eff]',card).forEach(b=>{ const on = b===btn; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
+  });
+  const wu = q('[data-wu]',card);
+  if(wu) wu.onchange = ()=>{ draft.warmup = wu.checked; };
+
+  const logNow = q('[data-log-now]',card);
+  if(logNow) logNow.onclick = ()=>{
+    const values = setValuesFrom(metric, draft);
+    if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
+    const set = logNormalSet(planRow.exerciseId, values, draft.effort, draft.warmup, null);
+    draft.warmup = false;
+    expandedCards.clear();
+    celebrateSet(set);
+    renderApp();
+  };
   const removeBtn = q('[data-remove]',card);
   if(removeBtn) removeBtn.onclick = ()=> removeExerciseFromActiveWorkout(log, planRow.exerciseId);
   const alt = q('[data-alternatives]',card);
@@ -569,12 +768,55 @@ function workoutExerciseCard(planRow, index, log, opts){
   return card;
 }
 
+function guideInfoBtnHtml(){
+  return `<button type="button" class="sb-info" data-info aria-label="How this works">${icon('info',15)}</button>`;
+}
+function bindGuideInfo(node, section){
+  const btn = q('[data-info]',node);
+  if(btn) btn.onclick = e=>{ e.stopPropagation(); openTrainingGuideSheet(section); };
+}
+function overloadProgressHtml(status){
+  if(!status || !status.progressText) return '';
+  return `
+    <div class="sb-progress">
+      <span>${escapeHtml(status.progressText)}</span>
+      <div class="meter"><span style="width:${Math.min(100, Math.round(status.qualifyingSessions/status.sessionsRequired*100))}%"></span></div>
+    </div>`;
+}
+
+/* "Too heavy" advice: reps fell below the range, so suggest a lighter load the
+   steppers can jump to. `status` is only passed for the next-session version. */
+function lowerAdviceBox({exerciseId, weight, applied, headline, note, status}){
+  const box = el(`
+    <div class="suggest-box lower-box">
+      ${guideInfoBtnHtml()}
+      <div class="sb-line">${escapeHtml(headline)}</div>
+      <div class="lb-note">${escapeHtml(note)}</div>
+      ${applied ? '' : `<button type="button" class="btn lb-use" data-use>Use ${weight}${units()}</button>`}
+      ${overloadProgressHtml(status)}
+    </div>`);
+  const use = q('[data-use]',box);
+  if(use) use.onclick = ()=>{
+    setLoadPlan(exerciseId, {weight, deferred:false});
+    showToast(`Steppers set to ${weight}${units()}`);
+    renderApp();
+  };
+  bindGuideInfo(box, 'lower');
+  return box;
+}
+
 /* The interactive part of progressive overload: accept / not today / adjust. */
 function progressionBlock(status, planRow){
   const box = el(`<div></div>`);
+  if(status.state==='lower'){
+    box.appendChild(lowerAdviceBox({exerciseId:status.exerciseId, weight:status.lowerWeight, applied:false,
+      headline:status.headline, note:status.note, status}));
+    return box;
+  }
   if(status.state==='ready'){
     const prompt = el(`
       <div class="prompt-box">
+        ${guideInfoBtnHtml()}
         <div class="ph">🎯 ${escapeHtml(status.headline)}</div>
         ${status.note?`<div class="pn">${escapeHtml(status.note)}</div>`:''}
         <div class="row">
@@ -594,65 +836,47 @@ function progressionBlock(status, planRow){
       renderApp();
     };
     q('[data-adjust]',prompt).onclick = ()=> openLoadAdjustSheet(status);
+    bindGuideInfo(prompt, 'overload');
     box.appendChild(prompt);
     return box;
   }
 
-  box.appendChild(el(`<div class="suggest-box">${escapeHtml(status.headline)}${status.note?' — '+escapeHtml(status.note):''}</div>`));
-  if(status.state==='accepted' || status.state==='deferred'){
-    const change = el(`<button class="btn ghost" style="padding:4px 0;font-size:12.5px;">Change today's weight</button>`);
-    change.onclick = ()=> openLoadAdjustSheet(status);
-    box.appendChild(change);
-  } else if(status.progressText){
-    box.appendChild(el(`
-      <div>
-        <p class="faint small" style="margin-top:6px;">${escapeHtml(status.progressText)}</p>
-        <div class="meter"><span style="width:${Math.min(100, Math.round(status.qualifyingSessions/status.sessionsRequired*100))}%"></span></div>
-      </div>`));
-  }
+  const adjustable = status.state==='accepted' || status.state==='deferred';
+  const suggest = el(`
+    <div class="suggest-box">
+      ${guideInfoBtnHtml()}
+      <div class="sb-line">${escapeHtml(status.headline)}${status.note?' — '+escapeHtml(status.note):''}</div>
+      ${adjustable ? `<button type="button" class="sb-change" data-change>Change today's weight</button>` : overloadProgressHtml(status)}
+    </div>`);
+  const change = q('[data-change]',suggest);
+  if(change) change.onclick = ()=> openLoadAdjustSheet(status);
+  bindGuideInfo(suggest, status.state==='no_history' ? 'overload' : 'qualifying');
+  box.appendChild(suggest);
   return box;
 }
 
-function duplicateLastSet(exerciseId){
-  const mine = setsInLogFor(todayLog(), exerciseId);
-  if(!mine.length) return null;
-  const last = mine[mine.length-1];
-  const metric = metricOf(getExercise(exerciseId));
-  const clone = {id:uid(), exerciseId, difficulty:last.difficulty, intent:last.isDropSet?null:(last.intent||null), ts:Date.now(), isPR:false, isDropSet:!!last.isDropSet, isWarmup:last.isDropSet?false:!!last.isWarmup};
-  if(last.isDropSet) clone.stages = (last.stages||[]).map(s=>({...s}));
-  else if(metric==='weight_reps' || metric==='assisted'){ clone.weight=last.weight; clone.reps=last.reps; }
-  else if(metric==='reps_only') clone.reps = last.reps;
-  else if(metric==='time') clone.duration = last.duration;
-  return clone;
-}
-function repeatLastSet(exerciseId){
-  const log = todayLog();
-  const clone = duplicateLastSet(exerciseId);
-  if(!clone) return;
-  log.sets.push(clone);
-  persistLog(log);
-  recomputePRs(exerciseId);
-  saveData(DATA);
-  if(clone.isDropSet) showToast('Drop set repeated 🔻'); else celebrateSet(clone);
-  renderApp();
-}
-function repeatSupersetRound(members){
-  const log = todayLog();
-  if(members.some(m=>!setsInLogFor(log, m.row.exerciseId).length)){
-    showToast('Log a round first');
-    return;
+/* Logs one set per superset member from each card's current stepper values. */
+function logSupersetRound(members, log){
+  const keyOf = m=> `${log.date}:${m.row.exerciseId}`;
+  if(members.some(m=> editingSets.has(keyOf(m)))){ showToast('Finish editing first'); return; }
+  const entries = [];
+  for(const m of members){
+    const ex = getExercise(m.row.exerciseId);
+    const draft = setDrafts.get(keyOf(m));
+    if(!ex || !draft) continue;
+    const values = setValuesFrom(metricOf(ex), draft);
+    if(!validSetValues(values)){ showToast(`Check the numbers for ${ex.name}`); return; }
+    entries.push({exerciseId:ex.id, values, draft});
   }
-  const clones = members.map(m=>duplicateLastSet(m.row.exerciseId)).filter(Boolean);
-  if(clones.length!==members.length) return;
-  clones.forEach(clone=>{
-    log.sets.push(clone);
-    recomputePRs(clone.exerciseId);
+  if(!entries.length) return;
+  const logged = entries.map(({exerciseId, values, draft})=>{
+    const set = logNormalSet(exerciseId, values, draft.effort, draft.warmup, null);
+    draft.warmup = false;
+    return set;
   });
-  persistLog(log);
-  saveData(DATA);
-  const pr = clones.find(s=>s.isPR);
-  if(pr) showToast('🏆 New personal record! You crushed it!', true);
-  else showToast('Same round logged');
+  expandedCards.clear();
+  if(logged.some(s=>s.isPR)) showToast('🏆 New personal record! You crushed it!', true);
+  else showToast('Round logged');
   renderApp();
 }
 

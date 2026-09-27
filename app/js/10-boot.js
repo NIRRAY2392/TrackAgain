@@ -2,8 +2,8 @@
 /* Create the rest channel early. Android ignores later edits to an
    existing channel, so a new id is required to pick up the default sound. */
 ensureRestNotifyChannel();
-try{ seedDemoHistory(/(?:\?|&)demo=1\b/.test(location.search||'')); }
-catch(err){ console.error(APP_NAME+': demo seed failed', err); }
+try{ purgeDemoData(); }
+catch(err){ console.error(APP_NAME+': demo cleanup failed', err); }
 renderApp();
 
 document.addEventListener('visibilitychange', ()=>{

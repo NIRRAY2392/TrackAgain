@@ -45,6 +45,100 @@ function readMetricFields(metric, root, idPrefix){
   return {};
 }
 
+/* Appends one normal set to today's log. Shared by the sheet and the card's inline logger. */
+function logNormalSet(exerciseId, values, effort, isWarmup, intent){
+  const log = todayLog();
+  persistLog(log);
+  const set = {id:uid(), exerciseId, difficulty:effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:!!isWarmup, ...values};
+  log.sets.push(set);
+  recomputePRs(exerciseId);
+  saveData(DATA);
+  return set;
+}
+
+const SET_VALUE_KEYS = ['weight','reps','duration'];
+function pickSetValues(src){
+  const out = {};
+  SET_VALUE_KEYS.forEach(k=>{ if(src[k]!=null) out[k] = src[k]; });
+  return out;
+}
+
+/* The card steppers' values in the shape a set or drop stage stores. */
+function setValuesFrom(metric, d){
+  if(metric==='time') return {duration:Math.round(d.duration)};
+  if(metric==='reps_only') return {reps:Math.round(d.reps)};
+  return {weight:d.weight, reps:Math.round(d.reps)};
+}
+function validSetValues(v){
+  return Object.values(v).every(x=> typeof x==='number' && !isNaN(x) && x>=0)
+    && !(v.reps!=null && v.reps<=0) && !(v.duration!=null && v.duration<=0);
+}
+
+/* Drops the weight on an already-logged set. A normal set becomes a drop set
+   whose first stage is its original values. Returns false at the stage cap. */
+function addDropStage(set, values, effort){
+  if(set.isDropSet && set.stages.length>=5) return false;
+  if(!set.isDropSet){
+    set.stages = [pickSetValues(set)];
+    SET_VALUE_KEYS.forEach(k=> delete set[k]);
+    Object.assign(set, {isDropSet:true, intent:null, isWarmup:false, isPR:false});
+  }
+  set.stages.push(values);
+  set.difficulty = effort;
+  recomputePRs(set.exerciseId);
+  saveData(DATA);
+  return true;
+}
+
+/* `stage` is null for a normal set; for a drop set it is the stage index being edited. */
+function updateLoggedSet(set, stage, values, effort, isWarmup, intent){
+  if(set.isDropSet && stage!=null) set.stages[stage] = values;
+  else Object.assign(set, values, {isWarmup:!!isWarmup, intent});
+  set.difficulty = effort;
+  recomputePRs(set.exerciseId);
+  saveData(DATA);
+}
+
+function snapshotSet(set){
+  const log = DATA.logs.find(l=> (l.sets||[]).includes(set));
+  return {log, index:log.sets.indexOf(set), copy:JSON.parse(JSON.stringify(set))};
+}
+function restoreSet(snap){
+  const i = snap.log.sets.findIndex(s=>s.id===snap.copy.id);
+  if(i>=0) snap.log.sets[i] = snap.copy;
+  else snap.log.sets.splice(Math.min(snap.index, snap.log.sets.length), 0, snap.copy);
+  recomputePRs(snap.copy.exerciseId);
+  saveData(DATA);
+}
+/* Removes a whole set (stage null) or one drop stage. A drop set left with a
+   single stage turns back into a normal set. Returns a snapshot for undo. */
+function removeSetOrStage(set, stage){
+  const snap = snapshotSet(set);
+  if(stage==null || !set.isDropSet){
+    snap.log.sets.splice(snap.index, 1);
+  } else {
+    set.stages.splice(stage, 1);
+    if(set.stages.length===1){
+      Object.assign(set, set.stages[0], {isDropSet:false});
+      delete set.stages;
+    }
+  }
+  recomputePRs(set.exerciseId);
+  saveData(DATA);
+  return snap;
+}
+
+function deleteLoggedSet(set){
+  confirmAction('Delete this set? This cannot be undone.', 'Delete', ()=>{
+    const log = DATA.logs.find(l=> (l.sets||[]).includes(set));
+    if(log) log.sets = log.sets.filter(s=>s.id!==set.id);
+    recomputePRs(set.exerciseId);
+    saveData(DATA);
+    closeSheets();
+    renderApp();
+  });
+}
+
 function openLogSetSheet(opts){
   const {exerciseId, planRow, existingSet} = opts;
   const ex = getExercise(exerciseId);
@@ -54,7 +148,7 @@ function openLogSetSheet(opts){
   const normalExisting = (existingSet && !existingSet.isDropSet) ? existingSet : null;
   let effort = existingSet ? existingSet.difficulty : 'med';
   let strengthIntent = normalExisting ? normalExisting.intent==='strength' : false;
-  let mode = (existingSet && existingSet.isDropSet) ? 'drop' : 'normal';
+  let mode = (existingSet && existingSet.isDropSet) ? 'drop' : (!existingSet && opts.startMode==='drop' ? 'drop' : 'normal');
   let stages = (existingSet && existingSet.isDropSet) ? existingSet.stages.map(s=>({...s})) : defaultDropStages(metric, plannedLoad);
   let isWarmup = existingSet ? !!existingSet.isWarmup : false;
 
@@ -68,12 +162,7 @@ function openLogSetSheet(opts){
       showToast('Set updated');
       renderApp();
     } else {
-      const log = todayLog();
-      persistLog(log);
-      const set = {id:uid(), exerciseId, difficulty:effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup, ...values};
-      log.sets.push(set);
-      recomputePRs(exerciseId);
-      saveData(DATA);
+      const set = logNormalSet(exerciseId, values, effort, isWarmup, intent);
       closeSheets();
       celebrateSet(set);
       renderApp();
@@ -128,8 +217,11 @@ function openLogSetSheet(opts){
               <span>Warm-up set (skipped for PRs, overload, and auto-finish)</span>
             </label>` : ''}
             <button class="btn" data-save style="width:100%;margin-top:10px;">${isEdit?'Save changes':(mode==='drop'?'Save drop set':'Save set')}</button>
+            ${isEdit ? '<button class="btn danger" data-delete-set style="width:100%;margin-top:8px;">Delete set</button>' : ''}
           </div>`);
         body.appendChild(wrap);
+        const delBtn = q('[data-delete-set]',wrap);
+        if(delBtn) delBtn.onclick = ()=> deleteLoggedSet(existingSet);
 
         qa('[data-mode]',wrap).forEach(chip=> chip.onclick = ()=>{
           if(chip.dataset.mode===mode) return;
@@ -397,7 +489,7 @@ function openSupersetLogSheet(members){
 
 /* --- adjust today's target load -------------------------------------- */
 function openLoadAdjustSheet(status){
-  const step = status.metric==='assisted' ? TRAINING.load.assistanceStepKg : TRAINING.load.plateStepKg;
+  const step = status.metric==='assisted' ? TRAINING.load.assistanceStepKg : loadStepFor(getExercise(status.exerciseId));
   let weight = status.targetWeight != null ? status.targetWeight
     : (status.suggestedWeight != null ? status.suggestedWeight : (status.referenceWeight || 0));
   openSheet({
@@ -680,19 +772,9 @@ function renderSplitScreen(){
   const today = weekdayKey();
   wrap.appendChild(el(`
     <div style="margin-bottom:14px;">
-      <h3 style="margin-bottom:6px;">Weekly split</h3>
-      <p class="faint small">Pick the current split. Home and a workout already in progress follow it.</p>
+      <h3 style="margin-bottom:6px;">Weekly split · ${escapeHtml(activeSplit().label)}</h3>
+      <p class="faint small">Edit any day below, or load a preset to replace the whole week. Home and a workout already in progress follow it.</p>
     </div>`));
-
-  wrap.appendChild(el(`<p class="section-title" style="margin-bottom:8px;">Current split</p>`));
-  const tabs = el(`<div class="split-tabs"></div>`);
-  Object.entries(DATA.splits).forEach(([key, split])=>{
-    const on = DATA.activeSplit===key;
-    const chip = el(`<div class="chip ${on?'on':''}">${escapeHtml(split.label)}${on?' · current':''}</div>`);
-    chip.onclick = ()=> selectCurrentSplit(key);
-    tabs.appendChild(chip);
-  });
-  wrap.appendChild(tabs);
 
   DAY_ORDER.forEach(dk=>{
     const day = splitDays()[dk];
@@ -754,9 +836,7 @@ function renderSplitScreen(){
         e.stopPropagation();
         confirmAction('Delete the preset “'+preset.name+'”? This cannot be undone.', 'Delete', ()=>{
           DATA.presets = DATA.presets.filter(p=>p.id!==preset.id);
-          if(preset.id==='builtin-gods-plan' || (preset.name||'').trim().toLowerCase()==="god's plan"){
-            DATA.settings.dismissedGodsPlan = true;
-          }
+          dismissBuiltinPreset(preset);
           saveData(DATA);
           showToast('Preset deleted');
           renderApp();
@@ -790,7 +870,7 @@ function openSavePresetSheet(){
         const subtitle = (q('#presetSub',body).value||'').trim();
         DATA.presets = DATA.presets || [];
         DATA.presets.unshift({
-          id:uid(), name, subtitle, splitKey:DATA.activeSplit,
+          id:uid(), name, subtitle,
           split:cloneSplit(current), savedAt:Date.now()
         });
         saveData(DATA);
@@ -829,9 +909,7 @@ function openEditPresetSheet(presetId){
 function loadSplitPreset(presetId){
   const preset = (DATA.presets||[]).find(p=>p.id===presetId);
   if(!preset || !preset.split) return;
-  const key = (preset.splitKey && DATA.splits[preset.splitKey]) ? preset.splitKey : DATA.activeSplit;
-  DATA.splits[key] = cloneSplit(preset.split);
-  DATA.activeSplit = key;
+  DATA.splits[DATA.activeSplit] = Object.assign(cloneSplit(preset.split), {label:preset.name});
   syncActiveWorkoutFromSplit({replaceAll:true});
   saveData(DATA);
   showToast(activeWorkoutLog() ? 'Loaded “'+preset.name+'”. Today’s workout updated.' : 'Loaded “'+preset.name+'”');
@@ -1364,13 +1442,82 @@ function renderRecordsMuscleScreen(muscle){
   wrap.appendChild(card);
   return wrap;
 }
+let prTreeOpen = {year:null, month:null, week:null};
+function prDayLabel(dateStr){
+  const d = parseDateKey(dateStr);
+  return `${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}, ${d.toLocaleDateString(undefined,{weekday:'short'})}`;
+}
+function prSignedText(n, suffix){
+  const v = roundTo(Math.abs(n));
+  return `${n>0?'+':'−'}${v}${suffix}`;
+}
+function prDeltaText(prev, cur, metric){
+  if(!prev) return 'First PR';
+  const a = prev.set, b = cur.set, parts = [];
+  const reps = (n)=> prSignedText(n, Math.abs(n)===1 ? ' rep' : ' reps');
+  if(metric==='weight_reps' || metric==='assisted'){
+    const dw = (b.weight||0)-(a.weight||0), dr = (b.reps||0)-(a.reps||0);
+    if(dw) parts.push(prSignedText(dw, ` ${units()}${metric==='assisted'?' assist':''}`));
+    if(dr) parts.push(reps(dr));
+  } else if(metric==='reps_only'){
+    const dr = (b.reps||0)-(a.reps||0);
+    if(dr) parts.push(reps(dr));
+  } else {
+    const dd = (b.duration||0)-(a.duration||0);
+    if(dd) parts.push(prSignedText(dd, 's'));
+  }
+  return parts.length ? parts.join(' · ') : 'Matched';
+}
+function prChartPoint(moment, metric){
+  const set = moment.set;
+  if(metric==='weight_reps') return roundTo(estimateOneRepMax(set.weight, set.reps));
+  if(metric==='reps_only') return set.reps;
+  if(metric==='time') return set.duration;
+  return set.weight;
+}
+function prOverallGain(moments, metric){
+  if(moments.length<2) return {value:'—', label:'Progress'};
+  const first = prChartPoint(moments[0], metric), last = prChartPoint(moments[moments.length-1], metric);
+  if(metric==='weight_reps') return {value:prSignedText(last-first, ` ${units()}`), label:'Est. 1RM gain'};
+  if(metric==='reps_only')   return {value:prSignedText(last-first, ''), label:'Reps gained'};
+  if(metric==='time')        return {value:prSignedText(last-first, 's'), label:'Hold gained'};
+  return {value:prSignedText(last-first, ` ${units()}`), label:'Assist change'};
+}
+function renderPrLogTree(moments, metric, rerender){
+  const shared = {open:prTreeOpen, unit:'PR', rerender};
+  const newest = moments[0];
+  const days = (parent, rows)=> rows.forEach(moment=>{
+    const idx = moments.indexOf(moment);
+    parent.appendChild(el(`
+      <div class="hist-day pr-row${moment===newest?' current':''}">
+        <div class="pr-when">
+          <strong>${escapeHtml(prDayLabel(moment.date))}</strong>
+          <div class="faint small">${moment===newest?'<span class="trophy">🏆</span> Current · ':''}${escapeHtml(prDeltaText(moments[idx+1], moment, metric))}</div>
+        </div>
+        <span class="pr-val">${escapeHtml(formatPrValue(moment.set, metric))}</span>
+      </div>`));
+  });
+  const weeks = (parent, rows)=> renderHistoryGroups(parent, rows, {...shared,
+    level:'week', keyOf:m=>weekStartKey(m.date), title:g=>weekTitle(g.key), below:days
+  });
+  const months = titled=> (parent, rows)=> renderHistoryGroups(parent, rows, {...shared,
+    level:'month', keyOf:m=>m.date.slice(0,7),
+    title:g=> titled ? monthNameOnly(g.key) : monthTitle(g.key),
+    below:weeks, clear:['week']
+  });
+  const box = el(`<div class="card flat hist-tree"></div>`);
+  renderHistoryGroups(box, moments, {...shared,
+    level:'year', keyOf:m=>m.date.slice(0,4), title:g=>g.key,
+    below:months(true), skipBelow:months(false), clear:['month','week']
+  });
+  return box;
+}
 function openRecordsPrSheet(exerciseId){
   const ex = getExercise(exerciseId);
   if(!ex) return;
   const metric = metricOf(ex);
   const moments = prMomentsForExercise(exerciseId);
   const current = moments[moments.length-1];
-  const first = moments[0];
   openSheet({
     title: ex.name,
     onClosed: renderApp,
@@ -1379,38 +1526,54 @@ function openRecordsPrSheet(exerciseId){
         body.appendChild(el(`<p class="empty">No PRs yet for this movement.</p>`));
         return;
       }
+      const gain = prOverallGain(moments, metric);
+      const sinceDays = daysInclusive(current.date, todayKey()) - 1;
+      const oneRm = metric==='weight_reps' ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
+      const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
+        : metric==='reps_only' ? 'Best reps' : metric==='time' ? 'Longest hold (s)' : `Assistance (${units()}) · lower is better`;
       body.appendChild(el(`
         <div>
-          <div class="records-pr">${escapeHtml(formatPrValue(current.set, metric))}</div>
-          <p class="faint small" style="margin:6px 0 4px;">Current PR · ${escapeHtml(formatLogDate(current.date))}</p>
-          ${first && first.date!==current.date ? `<p class="faint small">First PR: ${escapeHtml(formatLogDate(first.date))}</p>` : ''}
-          ${moments.length>1 ? '<div style="margin-top:16px;"><canvas data-chart height="140"></canvas></div>' : ''}
+          <div class="hero-card pr-hero">
+            <div class="hero-eyebrow">Current PR</div>
+            <div class="records-pr">${escapeHtml(formatPrValue(current.set, metric))}</div>
+            <p class="pr-hero-sub">${escapeHtml(prDayLabel(current.date))}${escapeHtml(oneRm)}</p>
+            ${statGridHtml([
+              {value:String(moments.length), label:moments.length===1?'PR set':'PRs set'},
+              {value:escapeHtml(gain.value), label:gain.label},
+              {value:String(sinceDays), label:sinceDays===1?'Day since PR':'Days since PR'}
+            ])}
+          </div>
+          ${moments.length>1 ? `
+          <div class="card flat">
+            <p class="section-title" style="margin-top:0;">Progress</p>
+            <p class="small muted" style="margin-bottom:4px;">${escapeHtml(axisLabel)}</p>
+            <div class="chart-box"><canvas data-chart></canvas></div>
+          </div>` : ''}
           <div class="section-title">PR log</div>
           <div data-prs></div>
         </div>`));
+      prTreeOpen = {year:current.date.slice(0,4), month:current.date.slice(0,7), week:weekStartKey(current.date)};
       const list = q('[data-prs]',body);
-      moments.forEach(moment=>{
-        list.appendChild(el(`<div class="hist-day"><strong>${escapeHtml(formatPrMomentLine(moment, metric))}</strong></div>`));
-      });
+      const drawLog = ()=>{
+        list.innerHTML = '';
+        list.appendChild(renderPrLogTree(moments.slice().reverse(), metric, drawLog));
+      };
+      drawLog();
       const canvas = q('[data-chart]',body);
-      if(canvas && window.Chart){
-        const styles = getComputedStyle(document.documentElement);
-        const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
-          : metric==='reps_only' ? 'Reps' : metric==='time' ? 'Hold (s)' : `Assistance (${units()})`;
-        const points = metric==='assisted' ? moments.map(m=>m.set.weight)
-          : metric==='weight_reps' ? moments.map(m=>roundTo(estimateOneRepMax(m.set.weight, m.set.reps)))
-          : metric==='reps_only' ? moments.map(m=>m.set.reps)
-          : moments.map(m=>m.set.duration);
-        new Chart(canvas.getContext('2d'), {
-          type:'line',
-          data:{ labels: moments.map(m=>m.date.slice(5)),
-                 datasets:[{label:axisLabel, data:points,
-                   borderColor: styles.getPropertyValue('--primary').trim()||'#e1ff00', backgroundColor:'transparent', tension:.3, pointRadius:4}] },
-          options:{ responsive:true,
-            plugins:{legend:{labels:{color:styles.getPropertyValue('--text-dim').trim()}}},
-            scales:{ x:{ticks:{color:styles.getPropertyValue('--text-faint').trim()},grid:{color:styles.getPropertyValue('--border').trim()}},
-                     y:{ticks:{color:styles.getPropertyValue('--text-faint').trim()},grid:{color:styles.getPropertyValue('--border').trim()}} } }
-        });
+      if(canvas){
+        const points = moments.map(m=> prChartPoint(m, metric));
+        const lo = Math.min(...points), hi = Math.max(...points);
+        const pad = (hi-lo)*0.25 || hi*0.1 || 1;
+        try{
+          paintHistoryChart(canvas, {
+            type:'line',
+            labels: moments.map(m=>{ const d = parseDateKey(m.date); return `${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}`; }),
+            data: points,
+            yMin: Math.max(0, Math.floor(lo-pad)), yMax: Math.ceil(hi+pad),
+            unit: metric==='time' ? 's' : metric==='reps_only' ? 'reps' : units()
+          });
+          bindHistoryChart(canvas);
+        }catch(err){ console.error(APP_NAME+': PR chart failed', err); }
       }
     }
   });
@@ -1423,6 +1586,7 @@ let historyCharts = [];
 let afterHistoryRender = [];
 let historyTreeOpen = {year:null, month:null, week:null};
 let weightLogOpen = false;
+let pastWorkoutsOpen = false;
 let weightTreeOpen = {year:null, month:null, week:null};
 
 function destroyHistoryCharts(){
@@ -1694,6 +1858,8 @@ function paintHistoryChart(canvas, spec){
   const step = Math.max(1, Math.ceil(n/6));
   labels.forEach((label,i)=>{
     if(i%step && i!==n-1) return;
+    if(spec.type!=='bar' && i!==n-1 && xCenter(n-1)-xCenter(i) < 56) return;
+    ctx.textAlign = spec.type==='bar' || n===1 ? 'center' : i===0 ? 'left' : i===n-1 ? 'right' : 'center';
     ctx.fillText(String(label), xCenter(i), padT+plotH+6);
   });
   canvas._hits = data.map((v,i)=>({x:xCenter(i), label:labels[i], value:v}));
@@ -1757,6 +1923,7 @@ function renderHistorySummaryCard(logs, filter){
   q('#historyRange', card).onchange = (e)=>{
     historyFilter = normalizeHistoryFilter(e.target.value);
     historyTreeOpen = {year:null, month:null, week:null};
+    pastWorkoutsOpen = false;
     renderApp();
   };
   afterHistoryRender.push(()=>{
@@ -1780,6 +1947,28 @@ function historyWorkoutRow(log){
   row.onclick = ()=> openHistoryDaySheet(log.date);
   return row;
 }
+function recentWorkoutRow(log, isLatest){
+  const d = parseDateKey(log.date);
+  const dayName = log.planName || (splitDays()[log.dayKey||weekdayKey(d)]||{}).name || 'Workout';
+  const dur = sessionDurationMs(log);
+  const ago = daysInclusive(log.date, todayKey()) - 1;
+  const when = ago===0 ? 'Today' : ago===1 ? 'Yesterday' : d.toLocaleDateString(undefined,{weekday:'long'});
+  const row = el(`
+    <div class="recent-row">
+      <div class="date-tile${isLatest?' latest':''}">
+        <span class="dd">${d.getDate()}</span>
+        <span class="mm">${escapeHtml(d.toLocaleDateString(undefined,{month:'short'}))}</span>
+      </div>
+      <div class="recent-main">
+        <div class="nm">${escapeHtml(dayName)}</div>
+        <div class="faint small">${escapeHtml(when)} · ${log.sets.length} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
+      </div>
+      ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
+      <span class="recent-go">${icon('chevronRight',18)}</span>
+    </div>`);
+  row.onclick = ()=> openHistoryDaySheet(log.date);
+  return row;
+}
 function appendHistoryDays(parent, logs){
   logs.forEach(log=> parent.appendChild(historyWorkoutRow(log)));
 }
@@ -1792,7 +1981,7 @@ function renderHistoryGroups(parent, logs, spec){
     parent.appendChild(historyFold(spec.level, spec.title(g), g.logs.length, open, ()=>{
       openState[spec.level] = open ? '' : g.key;
       (spec.clear||[]).forEach(k=> openState[k] = '');
-      renderApp();
+      (spec.rerender||renderApp)();
     }, spec.unit));
     if(open){
       const body = el(`<div class="hist-kids"></div>`);
@@ -1832,18 +2021,31 @@ function renderHistoryScreen(){
 
   const logs = allLogs.filter(l=>workoutInHistoryFilter(l, historyFilter));
   if(!allLogs.length){
-    wrap.appendChild(el(`<div class="section-title">Workouts</div>`));
+    wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
     wrap.appendChild(el(`<div class="card"><p class="empty">No workouts logged yet. Head to Home and start your first session.</p></div>`));
     return wrap;
   }
 
   wrap.appendChild(renderHistorySummaryCard(logs, historyFilter));
-  wrap.appendChild(el(`<div class="section-title">Workouts</div>`));
+  wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
   if(!logs.length){
     wrap.appendChild(el(`<div class="card"><p class="empty">No workouts recorded for this month.</p></div>`));
     return wrap;
   }
-  wrap.appendChild(renderHistoryWorkoutTree(logs));
+  const recent = logs.slice(0,3), past = logs.slice(3);
+  const recentCard = el(`<div class="card recent-card"></div>`);
+  recent.forEach((log,i)=> recentCard.appendChild(recentWorkoutRow(log, i===0)));
+  wrap.appendChild(recentCard);
+  if(past.length){
+    const toggle = el(`
+      <button class="btn secondary past-toggle">
+        <span>${pastWorkoutsOpen ? 'Hide past workouts' : `Past workouts (${past.length})`}</span>
+        ${icon(pastWorkoutsOpen ? 'chevronUp' : 'chevronDown', 18)}
+      </button>`);
+    toggle.onclick = ()=>{ pastWorkoutsOpen = !pastWorkoutsOpen; renderApp(); };
+    wrap.appendChild(toggle);
+    if(pastWorkoutsOpen) wrap.appendChild(renderHistoryWorkoutTree(past));
+  }
   return wrap;
 }
 function bodyWeightRow(entry){
@@ -1988,6 +2190,98 @@ function openHistoryDaySheet(date){
 }
 
 /* ------------------------------ Settings ------------------------------ */
+/* Plain-language explanation of §5 training rules. Numbers are read from
+   TRAINING and the active goal so the text stays true when settings change. */
+function trainingGuideSections(){
+  const goal = goalConfig();
+  const L = TRAINING.load, E = TRAINING.effortFactor, eq = L.minIncrementByEquip;
+  const n = goal.sessionsRequired;
+  const goalBlurb = {
+    hypertrophy:'Building muscle size. Moderate weights, taken close to failure.',
+    strength:'Lifting the heaviest weight you can. Heavy weights with longer rest.',
+    endurance:'Muscles that keep going for longer. Lighter weights, more reps.',
+  };
+  return [
+    {key:'overload', title:'How progressive overload works', body:`
+      <p>Muscles grow and get stronger when you slowly ask them to do a bit more. ${escapeHtml(APP_NAME)} does it in two steps, one at a time:</p>
+      <ol>
+        <li><b>Add reps.</b> Keep the same weight and work up to your target reps: ${goal.repsToEarnIncrease}, or the top of the exercise's rep range if that's lower (for example 10 reps in a 6–10 range).</li>
+        <li><b>Then add weight.</b> Once you've done that in ${n} session${n>1?'s':''} in a row, the app suggests a little more weight. You can <b>Use</b> it, choose <b>Not today</b>, or <b>Adjust</b> it.</li>
+      </ol>
+      <p>After the weight goes up your reps drop a little, and you build them back up again. That loop is the whole system.</p>`},
+    {key:'qualifying', title:'What is a qualifying session?', body:`
+      <p>A past workout for an exercise counts as a qualifying session when:</p>
+      <ul>
+        <li>at least ${goal.qualifyingSets} working sets (or all your planned sets, if you planned fewer) reached your <b>target reps</b>: ${goal.repsToEarnIncrease} ("Reps before more weight" in Settings → Training), capped at the top of the exercise's rep range,</li>
+        <li>at your usual weight or heavier (for assisted exercises: the same assistance or less),</li>
+        <li>and on average they felt no harder than Medium. Two Medium sets and one Hard still count; all Hard means the weight is still at your limit.</li>
+      </ul>
+      <p>Warm-ups and drop sets are ignored. The sessions must be in a row, so one that doesn't qualify resets the count. Today's workout starts counting from tomorrow.</p>
+      <p class="guide-eg">Example, 6–10 reps: 80 kg × 10, 10, 10 felt Medium, Medium, Hard qualifies. 80 kg × 10, 9, 8 doesn't yet, so keep adding reps.</p>`},
+    {key:'progress', title:'What does "Overload progress 0/2" mean?', body:`
+      <p>The first number is how many qualifying sessions you have in a row. The second is how many you need before more weight is suggested.</p>
+      <p>Your goal (${escapeHtml(goal.label)}) needs <b>${n}</b>. You can change it in Settings → Training → "Clean sessions needed".</p>
+      <p>When the bar fills up, the box changes to "Ready to add load" with a Use button.</p>`},
+    {key:'increase', title:'How much weight gets added?', body:`
+      <p>Upper-body exercises go up about ${L.increasePctUpper}% and lower-body exercises about ${L.increasePctLower}%, but never less than the smallest jump for the equipment:</p>
+      <ul>
+        <li>Barbell or Smith machine: ${eq.barbell} kg</li>
+        <li>Dumbbell: ${eq.dumbbell} kg · Kettlebell: ${eq.kettlebell} kg</li>
+        <li>Cable or machine: ${eq.cable} kg</li>
+      </ul>
+      <p>The result is rounded to that equipment step, so a 20 kg dumbbell goes to 21 kg. Assisted exercises lower the assistance by ${L.assistanceStepKg} kg instead.</p>`},
+    {key:'lower', title:'When does it tell me to lower the weight?', body:`
+      <p>When your reps fall below the bottom of the exercise's range, the weight is too heavy for your goal. For example, 82.5 kg × 4 when the range is 6–10.</p>
+      <ul>
+        <li><b>During the workout</b> the box suggests a lighter weight for your next set straight away. Tap <b>Use</b> and the steppers jump to it.</li>
+        <li><b>Next session</b>, if every set last time was below the range, the box opens with "Drop to …".</li>
+      </ul>
+      <p>The new weight is estimated from your set (using the same estimated one-rep max as PRs), aiming for the bottom of the range, and rounded down to the equipment step. Staying in range matters more than the number on the bar.</p>`},
+    {key:'goals', title:'Hypertrophy, Strength and Endurance', body:`
+      ${Object.entries(TRAINING.goals).map(([key,g])=>`
+        <div class="guide-goal${key===goal.key?' on':''}">
+          <b>${escapeHtml(g.label)}</b>${key===goal.key?' <span class="guide-you">Your goal</span>':''}
+          <p>${goalBlurb[key]||''} Usually about ${g.repsMin}–${g.repsMax} reps. More weight after ${g.sessionsRequired} clean session${g.sessionsRequired>1?'s':''}.</p>
+        </div>`).join('')}
+      <p>Your goal also changes how much each set counts toward effective sets. A 4-rep set counts ${TRAINING.repRanges[0].credit.hypertrophy} for Hypertrophy but ${TRAINING.repRanges[0].credit.strength} for Strength. Each exercise's rep range comes from your split, so set it to match your goal.</p>`},
+    {key:'effort', title:'Easy, Medium and Hard', body:`
+      <ul>
+        <li><b>Easy</b>: you could have done 4 or more extra reps. Counts as ${E.easy} of a set.</li>
+        <li><b>Medium</b>: about 2–3 reps left. Counts as ${E.med}.</li>
+        <li><b>Hard</b>: 0–1 reps left, close to failure. Counts as ${E.hard}.</li>
+      </ul>
+      <p>Be honest with it. It decides when you're ready for more weight and how much work your muscles really got.</p>`},
+    {key:'effective', title:'Effective sets and the muscle bars', body:`
+      <p>Not every set is equal. An effective set is one set's worth of real stimulus: the credit for its rep range (for your goal) multiplied by how hard it felt. A 10-rep Hard set counts 1.0; an Easy one about half.</p>
+      <p>Secondary muscles get ${Math.round(TRAINING.secondaryMuscleShare*100)}%, so bench press counts fully for chest and half for triceps. The bars compare your week with ${TRAINING.weeklyEffectiveSetTarget} effective sets per muscle.</p>`},
+    {key:'special', title:'Warm-ups, drop sets and PRs', body:`
+      <ul>
+        <li><b>Warm-ups</b> don't count for PRs, overload or effective sets. Use the Warm-up switch so they don't drag your numbers down.</li>
+        <li><b>Drop sets</b> count toward effective sets (by their first stage) but not PRs or overload.</li>
+        <li><b>PRs</b> use an estimated one-rep max, so 80 kg × 10 can beat 85 kg × 6.</li>
+      </ul>`},
+    {key:'bodyweight', title:'Bodyweight and timed exercises', body:`
+      <p>There's no weight to add, so the app asks for more reps (+1, or +2 if it felt easy) or a longer hold (+10 s, or +15 s if easy). If it felt hard, just match last time.</p>`},
+  ];
+}
+
+function openTrainingGuideSheet(openKey){
+  openSheet({
+    title:'Training guide',
+    build:(body)=>{
+      const wrap = el(`
+        <div class="guide">
+          ${trainingGuideSections().map(s=>`
+            <details class="guide-item" data-key="${s.key}" ${s.key===openKey?'open':''}>
+              <summary><span>${escapeHtml(s.title)}</span>${icon('chevronDown',18)}</summary>
+              <div class="guide-body">${s.body}</div>
+            </details>`).join('')}
+        </div>`);
+      body.appendChild(wrap);
+    }
+  });
+}
+
 function renderSettingsScreen(){
   const wrap = el(`<div></div>`);
   wrap.appendChild(el(`<h3 style="margin-bottom:14px;">Settings</h3>`));
@@ -2042,20 +2336,35 @@ function renderSettingsScreen(){
           ${Object.entries(TRAINING.goals).map(([key,g])=>`<option value="${key}" ${DATA.settings.goal===key?'selected':''}>${g.label}</option>`).join('')}
         </select>
       </div>
-      <div class="field"><label>Default sets when adding an exercise</label>
+      <div class="field"><label>Sets for new exercises</label>
         <select id="defaultPlanSets">
           ${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${defaultPlanSets()===n?'selected':''}>${n}</option>`).join('')}
         </select>
+        <p class="faint small" style="margin-top:6px;">Used when you add an exercise to a split.</p>
       </div>
       <div class="grid2">
         <div class="field"><label>Reps before more weight</label><input id="repsToEarn" type="number" min="3" max="30" inputmode="numeric" value="${goal.repsToEarnIncrease}"></div>
         <div class="field"><label>Clean sessions needed</label><input id="sessionsNeeded" type="number" min="1" max="5" inputmode="numeric" value="${goal.sessionsRequired}"></div>
       </div>
-      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit the top of that exercise's programmed rep range, including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()}, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}).</p>
+      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit ${goal.repsToEarnIncrease} reps (or the top of that exercise's programmed rep range, if lower), including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()}, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}).</p>
     </div>`);
   q('#defaultPlanSets',trainingCard).onchange = (e)=>{
-    DATA.settings.defaultPlanSets = parseInt(e.target.value, 10);
+    const before = defaultPlanSets();
+    const next = parseInt(e.target.value, 10);
+    DATA.settings.defaultPlanSets = next;
     saveData(DATA);
+    const split = activeSplit();
+    const rows = Object.values(split.days || {}).flatMap(day=> (day && day.exercises) || []).filter(row=> row.sets === before);
+    if(!rows.length || before === next) return;
+    chooseAction(
+      `Also change the ${rows.length} exercise${rows.length>1?'s':''} in your ${split.label} split that ${rows.length>1?'have':'has'} ${before} set${before>1?'s':''} to ${next}?`,
+      'Update split', ()=>{
+        rows.forEach(row=>{ row.sets = next; });
+        saveData(DATA);
+        showToast(`${rows.length} exercise${rows.length>1?'s':''} now ${next} set${next>1?'s':''}`);
+        renderApp();
+      },
+      'Keep split as is');
   };
   q('#goalSelect',trainingCard).onchange = (e)=>{
     const preset = TRAINING.goals[e.target.value];
@@ -2076,6 +2385,15 @@ function renderSettingsScreen(){
     DATA.settings.overload.sessionsRequired = value; saveData(DATA); renderApp();
   };
   wrap.appendChild(trainingCard);
+
+  wrap.appendChild(el(`<div class="section-title">Training guide</div>`));
+  const guideCard = el(`
+    <div class="card guide-card">
+      <p class="small muted">How the app decides when to add or lower weight, what a qualifying session is, and what each goal means.</p>
+      <button class="btn secondary" data-guide style="width:100%;margin-top:10px;">${icon('info',16)} Open training guide</button>
+    </div>`);
+  q('[data-guide]',guideCard).onclick = ()=> openTrainingGuideSheet();
+  wrap.appendChild(guideCard);
 
   wrap.appendChild(el(`<div class="section-title">Rest timer</div>`));
   const restCard = el(`
@@ -2168,8 +2486,17 @@ function renderSettingsScreen(){
     </footer>`));
   wrap.appendChild(el(`
     <div class="bmc-support">
-      <a href="https://buymeacoffee.com/nirray" target="_blank" rel="noopener noreferrer">
-        <img width="217" height="60" alt="Buy me a coffee" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAiEAAACZCAMAAADOzxqEAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAIRQTFRFw6kJSkAahnUS8NACHBkhpI8N4cME/+ZAhnUROjMcKyYfaFoW0rYHlYIPs5wLWU0Yd2cUHBkg//e/aFoVd2cTKyYe0rYG/98Q/+6AWU0X//vf//3v/+Eg//CP/+Mw//Sv/+pg//nP/+xw//Kf/+hQ/+5///a/DQwiDQwj/////90A////A0MgiAAAACx0Uk5T/////////////////////////////////////////////////////////wDH1gmMAAARpUlEQVR42uydaWPiOAyGfcQpuUMp04N2em8z8P//3xJiJ5btHJA2pY30ZbctE4z8RJZeK4bsTLt7ePq7RZuhXV+8PG4sHgj8cfNwj56atb29dhFy94QeQrt/bSXk/Rrdg1Yy8p+TkGfMPtCUvWxsQh4xgKA19vfOJOQVnYIGCptnSAgCgtaCSEXIIzoEzcpXNw0hz5iDoDlykYYQrGLQXPauCHlHX6A57bki5A7XGDS3XVSEoNSO1mb/lYRs0A9oHUGE7B7QD2itdrcnBLf70drtZUfu0Ato7fZ3R3CRQetcZghWMmhd9khQT0XrsneCPkDrsickBK3TLpAQNCQEDQlBQ0LQfjohnJB0oZsg5A/6FwnZbv10cUuXHy1Gbxepj26eLyHpav3Rb+uV4OjqGRLCF8uPobZcISOzI+TPcD4OjKTo7XkR4h8HyN6wbJoXISsw+wFdLRYJaUzsyxkKM9g1untWhNB6+ViQjhyDJKtAvRKr33kS8kEXoo0RkiZ/ypS2emGC/p4TIQszE6W0XGmkXe1/koXwVb0krdDfcyKEB0MzVH9f91TBBv09q2qX3x5Rw1T/h/6eFSH7LGO1HBhDZNaC+vvMCNlbekX7ACnzkO0VKiIzJaS0P+liRV2glKlrWpW46eEXC3T4LAmpzdcUM0P78LGYQUK67ZCxLHH7bjaE/FksFuSYxLNahW4xV50HIWTdNAiJ/lYyn4grVfWsMReZASHCykkDSq+qzkO4d7egdgob4FLz2wk5ft/fUf6i/WJCVh8jDZORX07IWEAwiPxyQki1lStIchUcw8U+U0mqpCRAv/9qQpLDLMuu030+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">
+      <a href="https://www.buymeachai.in/nirbhayraut" target="_blank" rel="noopener noreferrer">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 545 153" width="217" height="60" role="img" aria-label="Buy me a chai">
+          <rect width="545" height="153" rx="18" fill="#FFDD00"/>
+          <g fill="none" stroke="#0D0C22" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M74 44c-7-8 7-12 0-21M96 44c-7-8 7-12 0-21"/>
+            <path d="M50 58h76l-10 66a8 8 0 0 1-8 7H68a8 8 0 0 1-8-7z" fill="#fff"/>
+            <path d="M55 80h66l-6.5 44a4 4 0 0 1-4 3.5H65.5a4 4 0 0 1-4-3.5z" fill="#C8792E" stroke="none"/>
+            <path d="M50 58h76l-10 66a8 8 0 0 1-8 7H68a8 8 0 0 1-8-7z"/>
+          </g>
+          <text x="152" y="99" textLength="350" lengthAdjust="spacingAndGlyphs" font-family="'Cookie','Dancing Script','Segoe Script','Brush Script MT',cursive" font-size="62" font-weight="700" fill="#0D0C22" stroke="#0D0C22" stroke-width="1.5">Buy me a chai</text>
+        </svg>
       </a>
     </div>`));
   return wrap;
@@ -2178,7 +2505,7 @@ function renderSettingsScreen(){
 const RESET_CATEGORIES = [
   {key:'history',  label:'Workout history', hint:'All logged sessions and sets. Also clears Records, which are built from this.'},
   {key:'records',  label:'PR trophies on sets', hint:'Clears 🏆 flags. The Records tab still lists best lifts unless you also clear Workout history.'},
-  {key:'split',    label:'Split layout', hint:'Current PPL / PPL + UL days and exercises. Presets are kept unless you select them too.'},
+  {key:'split',    label:'Split layout', hint:"Your weekly days and exercises go back to God's Plan. Presets are kept unless you select them too."},
   {key:'weight',   label:'Weight logs', hint:'Body-weight entries in History.'},
   {key:'presets',  label:'Saved split presets', hint:'Named layouts on the Split tab.'},
   {key:'settings', label:'Settings', hint:'Name, weigh-in day, training goal, rest timer preferences.'}
@@ -2230,8 +2557,8 @@ function applyDataReset(picked){
     (DATA.logs||[]).forEach(log=> (log.sets||[]).forEach(set=>{ set.isPR = false; }));
   }
   if(picked.has('split')){
-    DATA.splits = seedSplits(DATA.exercises);
-    DATA.activeSplit = 'ppl';
+    DATA.splits = defaultSplits(DATA.exercises);
+    DATA.activeSplit = 'main';
   }
   if(picked.has('weight')) DATA.bodyWeight = [];
   if(picked.has('presets')) DATA.presets = [];

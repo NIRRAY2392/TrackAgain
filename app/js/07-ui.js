@@ -7,6 +7,9 @@ const ICON_PATHS = {
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
   flame:'<path d="M12 3c2 4-1 6 1 9 1.5 2 4 2 4 6a5 5 0 0 1-10 0c0-4 3-6 3-10 0-2-1-3 2-5Z"/>',
   plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
+  minus:'<path d="M5 12h14"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/>',
   x:'<path d="M18 6 6 18"/><path d="M6 6l12 12"/>',
   pencil:'<path d="M17 3.5a2.12 2.12 0 0 1 3 3L8.5 18 4 20l2-4.5Z"/>',
   reopen:'<path d="M3 12a9 9 0 1 0 2.5-6.2"/><path d="M3 4v5h5"/>',
@@ -14,6 +17,7 @@ const ICON_PATHS = {
   sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/>',
   moon:'<path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5Z"/>',
   chevronLeft:'<path d="m15 18-6-6 6-6"/>',
+  chevronRight:'<path d="m9 18 6-6-6-6"/>',
   chevronUp:'<path d="m6 15 6-6 6 6"/>',
   chevronDown:'<path d="m6 9 6 6 6-6"/>',
   copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
@@ -42,11 +46,14 @@ function qa(sel, root=document){ return [...root.querySelectorAll(sel)]; }
 function escapeHtml(value){ return String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 let toastTimer = null;
-function showToast(message, isPR){
+/* `action` is optional: {label, onClick} adds a button (e.g. Undo) and keeps the toast up longer. */
+function showToast(message, isPR, action){
   const root = document.getElementById('toastRoot');
-  root.innerHTML = `<div class="toast ${isPR?'pr':''}">${escapeHtml(message)}</div>`;
+  root.innerHTML = `<div class="toast ${isPR?'pr':''}">${escapeHtml(message)}${action ? `<button type="button" class="toast-action">${escapeHtml(action.label)}</button>` : ''}</div>`;
   if(toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>{ root.innerHTML=''; toastTimer = null; }, isPR?2600:1800);
+  const clear = ()=>{ root.innerHTML=''; if(toastTimer) clearTimeout(toastTimer); toastTimer = null; };
+  if(action) root.querySelector('.toast-action').onclick = ()=>{ clear(); action.onClick(); };
+  toastTimer = setTimeout(clear, action ? 4000 : (isPR?2600:1800));
 }
 function celebrateSet(set){
   if(set.isPR) showToast('🏆 New personal record! You crushed it!', true);
