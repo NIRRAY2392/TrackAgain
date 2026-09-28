@@ -66,23 +66,9 @@ h1 span{color:var(--spark);}
 .field input::placeholder{color:var(--text-faint);}
 .field input:focus{outline:none;border-color:var(--border-strong);}
 
-.pay{margin-top:16px;width:100%;height:56px;border-radius:16px;border:none;background:var(--spark);color:#000;font-weight:800;font-size:17px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;gap:10px;transition:transform .12s ease, box-shadow .2s ease;}
-.pay:active{transform:scale(.985);}
-.pay:hover{box-shadow:0 10px 26px rgba(225,255,0,.2);}
-.pay[disabled]{opacity:.45;cursor:not-allowed;}
-.pay svg{width:20px;height:20px;flex:0 0 auto;}
-.pay-note{margin:10px 2px 0;font-size:13px;color:var(--text-faint);text-align:center;line-height:1.45;}
-.pay-note.warn{color:var(--spark);}
-.qr-card.flash{animation:flash 1.2s ease;}
-@keyframes flash{0%,100%{border-color:var(--border);}30%{border-color:var(--spark);box-shadow:0 0 0 3px rgba(225,255,0,.25);}}
-.apps{display:none;margin-top:12px;gap:8px;}
-.apps.show{display:grid;grid-template-columns:repeat(3,1fr);}
-.app-btn{height:46px;border-radius:14px;border:1.5px solid var(--border-strong);background:transparent;font-weight:700;font-size:14px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;}
-.app-btn:active{background:var(--surface2);}
-.ios-note{display:none;margin:12px 0 0;font-size:13px;color:var(--text-faint);text-align:center;}
-.ios-note.show{display:block;}
+.total{display:flex;align-items:baseline;justify-content:space-between;margin-top:16px;padding:0 4px;}
+.total span{font-size:14px;font-weight:700;color:var(--text-faint);}
+.total b{font-size:28px;font-weight:800;letter-spacing:-0.02em;color:var(--spark);}
 
 .qr-card{text-align:center;}
 .qr-box{width:220px;height:220px;margin:4px auto 14px;background:#fff;border-radius:18px;padding:12px;}
@@ -93,12 +79,11 @@ h1 span{color:var(--spark);}
 .upi-row small{display:block;font-size:11.5px;color:var(--text-faint);font-weight:600;}
 .copy{height:38px;padding:0 14px;border-radius:11px;border:none;background:var(--spark);color:#000;font-weight:800;font-size:13.5px;cursor:pointer;flex:0 0 auto;}
 .help{font-size:12.5px;color:var(--text-faint);margin:14px 2px 0;line-height:1.5;text-align:left;}
-
-.thanks{display:none;text-align:center;border-color:rgba(225,255,0,.35);background:linear-gradient(180deg, rgba(225,255,0,.08), transparent);}
-.thanks.show{display:block;animation:rise .45s cubic-bezier(.16,1,.3,1) both;}
-.thanks .big{font-size:36px;line-height:1;margin-bottom:8px;}
-.thanks b{display:block;font-size:17px;}
-.thanks p{margin:4px 0 0;font-size:14px;color:var(--text-dim);}
+.save-qr{width:100%;height:48px;margin:0 0 12px;border-radius:14px;border:1.5px solid var(--spark);background:transparent;color:var(--spark);
+  font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;}
+.save-qr:active{background:var(--spark);color:#000;}
+.save-qr svg{width:18px;height:18px;}
+body.desktop .save-qr{display:none;}
 
 footer{text-align:center;font-size:12.5px;color:var(--text-faint);margin-top:22px;}
 footer p{margin:0 0 14px;}
@@ -162,12 +147,6 @@ body.desktop .qr-box{width:240px;height:240px;}
   </aside>
 
   <main class="support">
-  <div class="card thanks" id="thanks" role="status">
-    <div class="big">☕</div>
-    <b>Thank you!</b>
-    <p>If the payment went through, the chai is on its way to Nirbhay.</p>
-  </div>
-
   <div class="card">
     <p class="label">Buy Nirbhay a chai</p>
     <div class="picker">
@@ -191,25 +170,22 @@ body.desktop .qr-box{width:240px;height:240px;}
       <input id="name" type="text" maxlength="24" placeholder="Your name (optional)" autocomplete="given-name">
     </div>
 
-    <button type="button" class="pay" id="pay">Pay ₹90 with UPI</button>
-    <p class="pay-note" id="payNote">Opens your UPI app with ₹90 already filled in.</p>
-    <div class="apps" id="apps">
-      <button type="button" class="app-btn" data-app="phonepe">PhonePe</button>
-      <button type="button" class="app-btn" data-app="gpay">Google Pay</button>
-      <button type="button" class="app-btn" data-app="paytm">Paytm</button>
-    </div>
-    <p class="ios-note" id="iosNote">Pick the UPI app you have installed.</p>
+    <div class="total"><span>Total</span><b id="total">₹90</b></div>
   </div>
 
   <div class="card qr-card">
-    <p class="label" id="qrLabel">Or scan with any UPI app</p>
+    <p class="label" id="qrLabel">Scan with any UPI app</p>
     <div class="qr-box" id="qr" role="img" aria-label="UPI QR code"></div>
     <p class="qr-sub" id="qrSub">Scanning fills in ₹90 for you.</p>
+    <button type="button" class="save-qr" id="saveQr">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+      Save QR to gallery
+    </button>
     <div class="upi-row">
       <span><small>UPI ID</small><span id="upiId">9822878440-2@ybl</span></span>
       <button type="button" class="copy" id="copy">Copy</button>
     </div>
-    <p class="help">If your UPI app blocks the payment, copy the UPI ID or scan the QR and pay from inside the app.</p>
+    <p class="help" id="help">On this phone? Save the QR, open your UPI app's scanner and pick the image from your gallery. Or copy the UPI ID and send the amount yourself.</p>
   </div>
   </main>
   </div>
@@ -229,7 +205,6 @@ body.desktop .qr-box{width:240px;height:240px;}
 (function(){
   var PAYEE = {vpa:'9822878440-2@ybl', name:'Nirbhay Raut'};
   var CHAI_PRICE = 30;
-  var APP_LINKS = {phonepe:'phonepe://pay?', gpay:'gpay://upi/pay?', paytm:'paytmmp://pay?'};
 
   var ua = navigator.userAgent || '';
   var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
@@ -238,8 +213,8 @@ body.desktop .qr-box{width:240px;height:240px;}
 
   var $ = function(id){ return document.getElementById(id); };
   var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
-  var custom = $('custom'), nameInput = $('name'), payBtn = $('pay'), payNote = $('payNote');
-  var count = 3, customAmount = null, paidAt = 0;
+  var custom = $('custom'), nameInput = $('name');
+  var count = 3, customAmount = null, currentQR = null;
 
   function amount(){ return customAmount != null ? customAmount : count * CHAI_PRICE; }
   function note(){
@@ -256,6 +231,7 @@ body.desktop .qr-box{width:240px;height:240px;}
     var qr = qrcode(0, 'M');
     qr.addData(text);
     qr.make();
+    currentQR = qr;
     var n = qr.getModuleCount(), d = '';
     for(var r=0; r<n; r++) for(var c=0; c<n; c++) if(qr.isDark(r,c)) d += 'M'+c+' '+r+'h1v1h-1z';
     $('qr').innerHTML = '<svg viewBox="0 0 '+n+' '+n+'" shape-rendering="crispEdges"><path fill="#000" d="'+d+'"/></svg>';
@@ -263,12 +239,7 @@ body.desktop .qr-box{width:240px;height:240px;}
 
   function render(){
     var amt = amount(), ok = amt >= 1;
-    payBtn.disabled = !ok;
-    payBtn.textContent = ok ? 'Pay ₹' + amt + ' with UPI' : 'Enter an amount';
-    payNote.classList.remove('warn');
-    payNote.textContent = !ok ? 'Pick a number of chais or type an amount.'
-      : isDesktop ? 'On a computer? Scan the QR below with your phone — ₹' + amt + ' is already filled in.'
-      : 'Opens your UPI app with ₹' + amt + ' already filled in.';
+    $('total').textContent = ok ? '₹' + amt : '—';
     chips.forEach(function(ch){
       var on = customAmount == null && +ch.dataset.n === count;
       ch.classList.toggle('on', on);
@@ -289,37 +260,21 @@ body.desktop .qr-box{width:240px;height:240px;}
   };
   nameInput.oninput = render;
 
-  function openPayment(link){
-    paidAt = Date.now();
-    window.location.href = link;
-  }
-  payBtn.onclick = function(){
-    if(amount() < 1) return;
-    if(isDesktop){
-      payNote.textContent = 'UPI apps only open on a phone. Scan the QR below — ₹' + amount() + ' is already filled in.';
-      payNote.classList.add('warn');
-      var qrCard = document.querySelector('.qr-card');
-      qrCard.scrollIntoView({behavior:'smooth', block:'center'});
-      qrCard.classList.remove('flash'); void qrCard.offsetWidth; qrCard.classList.add('flash');
-      return;
-    }
-    if(isIOS){
-      $('apps').classList.add('show');
-      $('iosNote').classList.add('show');
-      return;
-    }
-    openPayment(upiLink());
+  $('saveQr').onclick = function(){
+    if(!currentQR) return;
+    var n = currentQR.getModuleCount(), cell = 12, pad = 4, size = (n + pad*2) * cell;
+    var canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000';
+    for(var r=0; r<n; r++) for(var c=0; c<n; c++) if(currentQR.isDark(r,c)) ctx.fillRect((c+pad)*cell, (r+pad)*cell, cell, cell);
+    var a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = 'TrackAgain-chai-' + (amount() >= 1 ? amount() : 'any') + '.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    toast(isIOS ? 'Long-press the image to save it' : 'QR saved');
   };
-  Array.prototype.forEach.call(document.querySelectorAll('.app-btn'), function(btn){
-    btn.onclick = function(){ openPayment(APP_LINKS[btn.dataset.app] + query()); };
-  });
-
-  document.addEventListener('visibilitychange', function(){
-    if(!document.hidden && paidAt && Date.now() - paidAt > 1500){
-      $('thanks').classList.add('show');
-      window.scrollTo({top:0, behavior:'smooth'});
-    }
-  });
 
   var toastTimer;
   function toast(msg){
@@ -349,6 +304,7 @@ body.desktop .qr-box{width:240px;height:240px;}
   if(isDesktop){
     document.body.classList.add('desktop');
     $('qrLabel').textContent = 'Scan with any UPI app on your phone';
+    $('help').textContent = 'If your UPI app blocks the scan, copy the UPI ID and send the amount from inside the app.';
   }
   render();
 })();
