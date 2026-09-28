@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Chai me up ₹ · Nirbhay Raut · TrackA'gain</title>
+<meta name="description" content="Buy Nirbhay a chai for building TrackA'gain — pay with any UPI app.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e1ff00'/%3E%3Cpath d='M8 19.5L16 10.5L24 19.5' stroke='%23000000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M10 22.5H22' stroke='%23000000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root{
+  --spark:#e1ff00; --bg:#000000; --surface:#0c0c0a; --surface2:#141310;
+  --text:#ffffff; --text-dim:#cac4b8; --text-faint:#8f8a80;
+  --border:rgba(202,196,184,.16); --border-strong:rgba(202,196,184,.3);
+  --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;line-height:1.5;}
+a{color:inherit;text-decoration:none;}
+button,input{font:inherit;color:inherit;}
+.wrap{max-width:460px;margin:0 auto;padding:20px 18px 48px;}
+
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0 22px;}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:15px;letter-spacing:-0.01em;color:var(--text-dim);}
+.brand svg{width:26px;height:26px;border-radius:8px;}
+.back{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 15px;border-radius:999px;border:1.5px solid var(--spark);color:var(--spark);
+  font-weight:800;font-size:14px;white-space:nowrap;transition:background .15s ease, color .15s ease;}
+.back:hover,.back:active{background:var(--spark);color:#000;}
+.back svg{width:16px;height:16px;}
+h1{font-size:30px;line-height:1.1;letter-spacing:-0.03em;font-weight:800;margin:0 0 18px;}
+h1 span{color:var(--spark);}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:22px;padding:20px;margin-bottom:14px;}
+
+.profile{display:flex;gap:14px;align-items:center;}
+.avatar{width:56px;height:56px;border-radius:50%;background:var(--spark);color:#000;font-weight:800;font-size:20px;
+  display:flex;align-items:center;justify-content:center;flex:0 0 auto;letter-spacing:-0.02em;}
+.profile b{display:block;font-size:17px;letter-spacing:-0.01em;}
+.profile p{margin:2px 0 0;font-size:14px;color:var(--text-dim);line-height:1.45;}
+.bio-toggle{margin-top:14px;width:100%;height:44px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;
+  display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-weight:700;font-size:14px;color:var(--text-dim);}
+.bio-toggle svg{width:18px;height:18px;transition:transform .2s ease;}
+.bio-toggle[aria-expanded="true"] svg{transform:rotate(180deg);}
+.bio{display:none;margin-top:14px;}
+.bio.open{display:block;animation:rise .3s cubic-bezier(.16,1,.3,1) both;}
+.bio p{margin:0 0 12px;font-size:14.5px;color:var(--text-dim);line-height:1.65;}
+.bio p:last-child{margin-bottom:0;}
+.bio strong{color:var(--text);font-weight:700;}
+
+.label{font-size:12.5px;font-weight:700;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px;}
+.picker{display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:18px;padding:10px;}
+.cup{width:38px;height:44px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;}
+.times{color:var(--text-faint);font-weight:700;font-size:15px;flex:0 0 auto;}
+.chips{display:flex;gap:6px;flex:0 0 auto;}
+.chip{width:44px;height:44px;flex:0 0 44px;padding:0;border-radius:50%;border:1.5px solid var(--border-strong);background:transparent;font-weight:800;font-size:16px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:transform .12s ease, background .15s ease;}
+.chip:active{transform:scale(.94);}
+.chip.on{background:var(--spark);color:#000;border-color:var(--spark);}
+.custom{flex:1;min-width:0;width:auto;height:44px;border-radius:14px;border:1.5px solid var(--border-strong);background:transparent;text-align:center;font-weight:800;font-size:15px;padding:0 6px;}
+.custom::placeholder{color:var(--text-faint);font-weight:600;}
+.custom.on{border-color:var(--spark);}
+.custom:focus{outline:none;border-color:var(--spark);}
+
+.field{margin-top:14px;}
+.field input{width:100%;height:48px;border-radius:14px;border:1.5px solid var(--border);background:var(--surface2);padding:0 14px;font-size:15px;}
+.field input::placeholder{color:var(--text-faint);}
+.field input:focus{outline:none;border-color:var(--border-strong);}
+
+.pay{margin-top:16px;width:100%;height:56px;border-radius:16px;border:none;background:var(--spark);color:#000;font-weight:800;font-size:17px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:10px;transition:transform .12s ease, box-shadow .2s ease;}
+.pay:active{transform:scale(.985);}
+.pay:hover{box-shadow:0 10px 26px rgba(225,255,0,.2);}
+.pay[disabled]{opacity:.45;cursor:not-allowed;}
+.pay svg{width:20px;height:20px;flex:0 0 auto;}
+.pay-note{margin:10px 2px 0;font-size:13px;color:var(--text-faint);text-align:center;line-height:1.45;}
+.pay-note.warn{color:var(--spark);}
+.qr-card.flash{animation:flash 1.2s ease;}
+@keyframes flash{0%,100%{border-color:var(--border);}30%{border-color:var(--spark);box-shadow:0 0 0 3px rgba(225,255,0,.25);}}
+.apps{display:none;margin-top:12px;gap:8px;}
+.apps.show{display:grid;grid-template-columns:repeat(3,1fr);}
+.app-btn{height:46px;border-radius:14px;border:1.5px solid var(--border-strong);background:transparent;font-weight:700;font-size:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;}
+.app-btn:active{background:var(--surface2);}
+.ios-note{display:none;margin:12px 0 0;font-size:13px;color:var(--text-faint);text-align:center;}
+.ios-note.show{display:block;}
+
+.qr-card{text-align:center;}
+.qr-box{width:220px;height:220px;margin:4px auto 14px;background:#fff;border-radius:18px;padding:12px;}
+.qr-box svg{width:100%;height:100%;display:block;}
+.qr-sub{font-size:13.5px;color:var(--text-dim);margin:0 0 14px;}
+.upi-row{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:8px 8px 8px 14px;}
+.upi-row span{font-size:14.5px;font-weight:700;letter-spacing:.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.upi-row small{display:block;font-size:11.5px;color:var(--text-faint);font-weight:600;}
+.copy{height:38px;padding:0 14px;border-radius:11px;border:none;background:var(--spark);color:#000;font-weight:800;font-size:13.5px;cursor:pointer;flex:0 0 auto;}
+.help{font-size:12.5px;color:var(--text-faint);margin:14px 2px 0;line-height:1.5;text-align:left;}
+
+.thanks{display:none;text-align:center;border-color:rgba(225,255,0,.35);background:linear-gradient(180deg, rgba(225,255,0,.08), transparent);}
+.thanks.show{display:block;animation:rise .45s cubic-bezier(.16,1,.3,1) both;}
+.thanks .big{font-size:36px;line-height:1;margin-bottom:8px;}
+.thanks b{display:block;font-size:17px;}
+.thanks p{margin:4px 0 0;font-size:14px;color:var(--text-dim);}
+
+footer{text-align:center;font-size:12.5px;color:var(--text-faint);margin-top:22px;}
+footer p{margin:0 0 14px;}
+
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translate(-50%, 20px);opacity:0;pointer-events:none;
+  background:var(--spark);color:#000;font-weight:800;font-size:14px;padding:11px 18px;border-radius:12px;transition:opacity .2s ease, transform .25s cubic-bezier(.16,1,.3,1);}
+.toast.show{opacity:1;transform:translate(-50%,0);}
+
+body.desktop .qr-box{width:240px;height:240px;}
+
+@media (min-width:880px){
+  .wrap{max-width:1000px;padding:28px 32px 56px;}
+  header{padding-bottom:36px;}
+  .layout{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:32px;align-items:start;}
+  .about{position:sticky;top:28px;}
+  h1{font-size:46px;margin-bottom:24px;}
+  .about .card{padding:26px;}
+  .bio-toggle{display:none;}
+  .bio{display:block;margin-top:20px;}
+  .bio p{font-size:15.5px;}
+}
+@keyframes rise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+:focus-visible{outline:2px solid var(--spark);outline-offset:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="../">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#e1ff00"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000" stroke-width="2.4" stroke-linecap="round"/></svg>
+      TrackA'gain
+    </a>
+    <a class="back" href="../">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Back to TrackA'gain
+    </a>
+  </header>
+
+  <div class="layout">
+  <aside class="about">
+    <h1>Chai me up <span>₹</span></h1>
+
+    <div class="card">
+      <div class="profile">
+        <div class="avatar" aria-hidden="true">NR</div>
+        <div>
+          <b>Nirbhay Raut</b>
+          <p>Engineering student in Nagpur, building TrackA'gain solo.</p>
+        </div>
+      </div>
+      <button type="button" class="bio-toggle" id="bioToggle" aria-expanded="false" aria-controls="bio">
+        Read my story
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="bio" id="bio">
+        <p>Hey, I'm Nirbhay — a third-year engineering student in Nagpur building <strong>Track'A'gain</strong>, a workout tracker I made because I couldn't find one that worked exactly the way I wanted it to.</p>
+        <p>It started as a single HTML file and has grown into a full Android app with progressive overload suggestions, supersets, drop sets, PR tracking, and more — all built solo, one gym session at a time.</p>
+        <p>If Track'A'gain has made your workouts easier to track, a chai goes a long way in keeping the updates coming. ☕💪</p>
+      </div>
+    </div>
+  </aside>
+
+  <main class="support">
+  <div class="card thanks" id="thanks" role="status">
+    <div class="big">☕</div>
+    <b>Thank you!</b>
+    <p>If the payment went through, the chai is on its way to Nirbhay.</p>
+  </div>
+
+  <div class="card">
+    <p class="label">Buy Nirbhay a chai</p>
+    <div class="picker">
+      <div class="cup" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 48 48" fill="none" stroke="#e1ff00" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18h26l-3 20a4 4 0 0 1-4 3.5H16a4 4 0 0 1-4-3.5z"/>
+          <path d="M35 22h3a5 5 0 0 1 0 10h-4"/>
+          <path d="M17 6c-2 2.5 2 4.5 0 7M23 6c-2 2.5 2 4.5 0 7M29 6c-2 2.5 2 4.5 0 7"/>
+        </svg>
+      </div>
+      <span class="times">×</span>
+      <div class="chips" role="radiogroup" aria-label="Number of chais">
+        <button type="button" class="chip" data-n="1" role="radio">1</button>
+        <button type="button" class="chip on" data-n="3" role="radio">3</button>
+        <button type="button" class="chip" data-n="5" role="radio">5</button>
+      </div>
+      <input class="custom" id="custom" type="number" inputmode="numeric" min="1" max="100000" placeholder="₹ Other" aria-label="Custom amount in rupees">
+    </div>
+
+    <div class="field">
+      <input id="name" type="text" maxlength="24" placeholder="Your name (optional)" autocomplete="given-name">
+    </div>
+
+    <button type="button" class="pay" id="pay">Pay ₹90 with UPI</button>
+    <p class="pay-note" id="payNote">Opens your UPI app with ₹90 already filled in.</p>
+    <div class="apps" id="apps">
+      <button type="button" class="app-btn" data-app="phonepe">PhonePe</button>
+      <button type="button" class="app-btn" data-app="gpay">Google Pay</button>
+      <button type="button" class="app-btn" data-app="paytm">Paytm</button>
+    </div>
+    <p class="ios-note" id="iosNote">Pick the UPI app you have installed.</p>
+  </div>
+
+  <div class="card qr-card">
+    <p class="label" id="qrLabel">Or scan with any UPI app</p>
+    <div class="qr-box" id="qr" role="img" aria-label="UPI QR code"></div>
+    <p class="qr-sub" id="qrSub">Scanning fills in ₹90 for you.</p>
+    <div class="upi-row">
+      <span><small>UPI ID</small><span id="upiId">9822878440-2@ybl</span></span>
+      <button type="button" class="copy" id="copy">Copy</button>
+    </div>
+    <p class="help">If your UPI app blocks the payment, copy the UPI ID or scan the QR and pay from inside the app.</p>
+  </div>
+  </main>
+  </div>
+
+  <footer>
+    <p>Payments go straight to Nirbhay through UPI. This page stores nothing.</p>
+    <a class="back" href="../">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Back to TrackA'gain
+    </a>
+  </footer>
+</div>
+<div class="toast" id="toast">Copied</div>
+
+<script src="qrcode.min.js"></script>
+<script>
+(function(){
+  var PAYEE = {vpa:'9822878440-2@ybl', name:'Nirbhay Raut'};
+  var CHAI_PRICE = 30;
+  var APP_LINKS = {phonepe:'phonepe://pay?', gpay:'gpay://upi/pay?', paytm:'paytmmp://pay?'};
+
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  var isAndroid = /Android/i.test(ua);
+  var isDesktop = !isIOS && !isAndroid;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var custom = $('custom'), nameInput = $('name'), payBtn = $('pay'), payNote = $('payNote');
+  var count = 3, customAmount = null, paidAt = 0;
+
+  function amount(){ return customAmount != null ? customAmount : count * CHAI_PRICE; }
+  function note(){
+    var who = nameInput.value.trim().replace(/[^\w .'-]/g,'').slice(0,24);
+    return 'Chai for TrackAgain' + (who ? ' from ' + who : '');
+  }
+  function query(){
+    return 'pa=' + PAYEE.vpa + '&pn=' + encodeURIComponent(PAYEE.name) + '&am=' + amount().toFixed(2)
+      + '&cu=INR&tn=' + encodeURIComponent(note());
+  }
+  function upiLink(){ return 'upi://pay?' + query(); }
+
+  function drawQR(text){
+    var qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    var n = qr.getModuleCount(), d = '';
+    for(var r=0; r<n; r++) for(var c=0; c<n; c++) if(qr.isDark(r,c)) d += 'M'+c+' '+r+'h1v1h-1z';
+    $('qr').innerHTML = '<svg viewBox="0 0 '+n+' '+n+'" shape-rendering="crispEdges"><path fill="#000" d="'+d+'"/></svg>';
+  }
+
+  function render(){
+    var amt = amount(), ok = amt >= 1;
+    payBtn.disabled = !ok;
+    payBtn.textContent = ok ? 'Pay ₹' + amt + ' with UPI' : 'Enter an amount';
+    payNote.classList.remove('warn');
+    payNote.textContent = !ok ? 'Pick a number of chais or type an amount.'
+      : isDesktop ? 'On a computer? Scan the QR below with your phone — ₹' + amt + ' is already filled in.'
+      : 'Opens your UPI app with ₹' + amt + ' already filled in.';
+    chips.forEach(function(ch){
+      var on = customAmount == null && +ch.dataset.n === count;
+      ch.classList.toggle('on', on);
+      ch.setAttribute('aria-checked', on);
+    });
+    custom.classList.toggle('on', customAmount != null);
+    $('qrSub').textContent = ok ? 'Scanning fills in ₹' + amt + ' for you.' : 'Scan to pay any amount.';
+    drawQR(ok ? upiLink() : 'upi://pay?pa=' + PAYEE.vpa + '&pn=' + encodeURIComponent(PAYEE.name) + '&cu=INR');
+  }
+
+  chips.forEach(function(ch){
+    ch.onclick = function(){ count = +ch.dataset.n; customAmount = null; custom.value = ''; render(); };
+  });
+  custom.oninput = function(){
+    var v = Math.floor(parseFloat(custom.value));
+    customAmount = custom.value === '' ? null : (isNaN(v) ? 0 : Math.min(100000, Math.max(0, v)));
+    render();
+  };
+  nameInput.oninput = render;
+
+  function openPayment(link){
+    paidAt = Date.now();
+    window.location.href = link;
+  }
+  payBtn.onclick = function(){
+    if(amount() < 1) return;
+    if(isDesktop){
+      payNote.textContent = 'UPI apps only open on a phone. Scan the QR below — ₹' + amount() + ' is already filled in.';
+      payNote.classList.add('warn');
+      var qrCard = document.querySelector('.qr-card');
+      qrCard.scrollIntoView({behavior:'smooth', block:'center'});
+      qrCard.classList.remove('flash'); void qrCard.offsetWidth; qrCard.classList.add('flash');
+      return;
+    }
+    if(isIOS){
+      $('apps').classList.add('show');
+      $('iosNote').classList.add('show');
+      return;
+    }
+    openPayment(upiLink());
+  };
+  Array.prototype.forEach.call(document.querySelectorAll('.app-btn'), function(btn){
+    btn.onclick = function(){ openPayment(APP_LINKS[btn.dataset.app] + query()); };
+  });
+
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden && paidAt && Date.now() - paidAt > 1500){
+      $('thanks').classList.add('show');
+      window.scrollTo({top:0, behavior:'smooth'});
+    }
+  });
+
+  var toastTimer;
+  function toast(msg){
+    var t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 1600);
+  }
+  $('copy').onclick = function(){
+    var done = function(){ toast('UPI ID copied'); };
+    if(navigator.clipboard && window.isSecureContext){
+      navigator.clipboard.writeText(PAYEE.vpa).then(done, fallback);
+    } else fallback();
+    function fallback(){
+      var ta = document.createElement('textarea');
+      ta.value = PAYEE.vpa; ta.setAttribute('readonly',''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); done(); }catch(e){ toast('Copy failed — long-press the UPI ID'); }
+      document.body.removeChild(ta);
+    }
+  };
+
+  $('bioToggle').onclick = function(){
+    var open = $('bio').classList.toggle('open');
+    this.setAttribute('aria-expanded', open);
+    this.firstChild.textContent = open ? 'Hide my story ' : 'Read my story ';
+  };
+
+  if(isDesktop){
+    document.body.classList.add('desktop');
+    $('qrLabel').textContent = 'Scan with any UPI app on your phone';
+  }
+  render();
+})();
+</script>
+</body>
+</html>

@@ -293,10 +293,14 @@ a{color:var(--accent);}
   color:var(--text-faint);}
 .settings-footer .credit-mail{color:var(--text-faint);text-decoration:none;font-weight:600;}
 .settings-footer .credit-mail:active{opacity:.7;}
-.bmc-support{margin-top:18px;margin-bottom:4px;text-align:center;}
-.bmc-support a{display:inline-block;line-height:0;border-radius:12px;}
-.bmc-support svg{height:60px;width:217px;display:block;}
-.bmc-support a:active{opacity:.88;}
+.chai-support{margin-top:18px;margin-bottom:4px;text-align:center;}
+.chai-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;width:217px;height:60px;border-radius:16px;
+  background:var(--primary);color:#000000;border:1.5px solid var(--primary);font-weight:800;font-size:18px;letter-spacing:-0.01em;text-decoration:none;
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);}
+.chai-btn:active{transform:scale(.97);}
+:root[data-theme="dark"] .chai-btn{box-shadow:var(--glow);}
+:root[data-theme="light"] .chai-btn{border-color:#000000;}
+.chai-hint{margin-top:8px;font-size:12px;color:var(--text-faint);font-weight:600;}
 
 .day-card{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:10px;box-shadow:var(--shadow);
   transition:transform var(--dur) var(--ease), border-color var(--dur) var(--ease);}

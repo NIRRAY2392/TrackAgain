@@ -2485,19 +2485,16 @@ function renderSettingsScreen(){
       <div class="copy">©2026 <a class="credit-mail" href="mailto:trackagainsupport@gmail.com">trackagainsupport@gmail.com</a></div>
     </footer>`));
   wrap.appendChild(el(`
-    <div class="bmc-support">
-      <a href="https://www.buymeachai.in/nirbhayraut" target="_blank" rel="noopener noreferrer">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 545 153" width="217" height="60" role="img" aria-label="Buy me a chai">
-          <rect width="545" height="153" rx="18" fill="#FFDD00"/>
-          <g fill="none" stroke="#0D0C22" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M74 44c-7-8 7-12 0-21M96 44c-7-8 7-12 0-21"/>
-            <path d="M50 58h76l-10 66a8 8 0 0 1-8 7H68a8 8 0 0 1-8-7z" fill="#fff"/>
-            <path d="M55 80h66l-6.5 44a4 4 0 0 1-4 3.5H65.5a4 4 0 0 1-4-3.5z" fill="#C8792E" stroke="none"/>
-            <path d="M50 58h76l-10 66a8 8 0 0 1-8 7H68a8 8 0 0 1-8-7z"/>
-          </g>
-          <text x="152" y="99" textLength="350" lengthAdjust="spacingAndGlyphs" font-family="'Cookie','Dancing Script','Segoe Script','Brush Script MT',cursive" font-size="62" font-weight="700" fill="#0D0C22" stroke="#0D0C22" stroke-width="1.5">Buy me a chai</text>
+    <div class="chai-support">
+      <a class="chai-btn" href="https://nirray2392.github.io/TrackAgain/chai/" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 48 48" width="26" height="26" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18h26l-3 20a4 4 0 0 1-4 3.5H16a4 4 0 0 1-4-3.5z"/>
+          <path d="M35 22h3a5 5 0 0 1 0 10h-4"/>
+          <path d="M17 6c-2 2.5 2 4.5 0 7M23 6c-2 2.5 2 4.5 0 7M29 6c-2 2.5 2 4.5 0 7"/>
         </svg>
+        Chai me up ₹
       </a>
+      <div class="chai-hint">Pay with any UPI app</div>
     </div>`));
   return wrap;
 }
