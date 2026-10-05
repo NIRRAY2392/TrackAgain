@@ -9,7 +9,6 @@ const ICON_PATHS = {
   plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
   minus:'<path d="M5 12h14"/>',
   check:'<path d="M20 6 9 17l-5-5"/>',
-  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/>',
   x:'<path d="M18 6 6 18"/><path d="M6 6l12 12"/>',
   pencil:'<path d="M17 3.5a2.12 2.12 0 0 1 3 3L8.5 18 4 20l2-4.5Z"/>',
   reopen:'<path d="M3 12a9 9 0 1 0 2.5-6.2"/><path d="M3 4v5h5"/>',
@@ -24,6 +23,7 @@ const ICON_PATHS = {
   trash:'<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/>',
   search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   link:'<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M8 12h8"/>',
+  timer:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M10 2h4"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   dumbbell:'<path d="M6.5 6.5v11"/><path d="M17.5 6.5v11"/><path d="M4 9v6"/><path d="M20 9v6"/><path d="M6.5 12h11"/>'
 };
@@ -119,6 +119,17 @@ function capPlugin(name){
   catch(_){ return null; }
 }
 function capacitorAppPlugin(){ return capPlugin('App'); }
+/* Screen stays on while a workout is open (Settings → Keep screen on). */
+let screenKeptAwake = false;
+function setScreenAwake(on){
+  const want = !!on && !!(DATA && DATA.settings && DATA.settings.keepScreenOn);
+  if(want===screenKeptAwake) return;
+  const plugin = capPlugin('KeepAwake');
+  if(!plugin) return;
+  screenKeptAwake = want;
+  const call = want ? plugin.keepAwake : plugin.allowSleep;
+  if(typeof call==='function') Promise.resolve(call.call(plugin)).catch(()=>{ screenKeptAwake = !want; });
+}
 function pushOverlayHistory(){
   overlayStack++;
   if(capacitorAppPlugin()) return;
@@ -132,17 +143,38 @@ function popOverlayHistory(){
   try{ history.back(); }catch(_){}
   setTimeout(()=>{ ignoreHistoryPop = false; }, 80);
 }
+/* Back button / browser back. The history entry (web) is already gone, so the
+   overlay count is adjusted here instead of by sheet.close. Sheets go through
+   their own close request, so discard guards and onClosed still run. */
+let closingFromBack = false;
 function closeTopOverlay(){
-  const confirm = document.getElementById('confirmRoot');
-  if(confirm && confirm.innerHTML.trim()){ confirm.innerHTML=''; return true; }
-  const order = [SHEET_ROOT.form, SHEET_ROOT.picker, SHEET_ROOT.main];
-  for(const id of order){
-    const root = document.getElementById(id);
-    if(!root || !root.innerHTML.trim()) continue;
-    root.innerHTML='';
-    return true;
+  closingFromBack = true;
+  try{
+    const confirm = document.getElementById('confirmRoot');
+    if(confirm && confirm.innerHTML.trim()){
+      confirm.innerHTML='';
+      overlayStack = Math.max(0, overlayStack-1);
+      return true;
+    }
+    const order = [SHEET_ROOT.form, SHEET_ROOT.picker, SHEET_ROOT.main];
+    for(const id of order){
+      const root = document.getElementById(id);
+      if(!root || !root.innerHTML.trim()) continue;
+      const node = root.firstElementChild;
+      overlayStack = Math.max(0, overlayStack-1);
+      if(typeof root._requestClose==='function') root._requestClose();
+      else root.innerHTML='';
+      if(node && root.contains(node)){
+        // Close was refused (e.g. "discard changes?"): the sheet keeps its history entry.
+        overlayStack++;
+        if(!capacitorAppPlugin()){ try{ history.pushState({overlay:APP_NAME, n:overlayStack}, ''); }catch(_){} }
+      }
+      return true;
+    }
+    return false;
+  } finally {
+    closingFromBack = false;
   }
-  return false;
 }
 function openSheet(opts){
   const root = document.getElementById(opts.root || SHEET_ROOT.main);
@@ -166,7 +198,7 @@ function openSheet(opts){
     close(){
       root.innerHTML='';
       if(opts.onClosed) opts.onClosed();
-      if(!ignoreHistoryPop) popOverlayHistory();
+      if(!ignoreHistoryPop && !closingFromBack) popOverlayHistory();
     }
   };
   const requestClose = ()=> opts.onRequestClose ? opts.onRequestClose(sheet) : sheet.close();
@@ -175,6 +207,7 @@ function openSheet(opts){
   node.onclick = (e)=>{ if(e.target===node) requestClose(); };
   const replacing = !!(root.innerHTML && root.innerHTML.trim());
   root.innerHTML=''; root.appendChild(node);
+  root._requestClose = ()=>{ if(root.contains(node)) requestClose(); };
   if(!replacing) pushOverlayHistory();
   if(opts.build) opts.build(sheet.body, sheet);
   return sheet;
@@ -200,6 +233,50 @@ function searchFieldHtml(id, placeholder, value){
   return `<div class="search-wrap"><span class="mag">${icon('search',16)}</span><input id="${id}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value||'')}"></div>`;
 }
 function tagsHtml(list){ return list.map(t=>`<span class="tag">${escapeHtml(t)}</span>`).join(''); }
+
+/* Slot-machine clock: each digit is a reel that rolls to its new value.
+   The reel holds 0-9 twice. Counting up rests on the first copy and rolls
+   forward into the second on 9→0; counting down (down=true) rests on the
+   second copy and rolls back into the first on 0→9. After a wrap the reel
+   snaps to its resting copy, which shows the same digit, so it is unseen. */
+const SLOT_REEL = '01234567890123456789';
+function slotBase(d, down){ return down ? 10+d : d; }
+function slotShape(text){ return [...text].map(c=>/\d/.test(c)?'d':c).join(''); }
+function slotClockHtml(text, down){
+  return [...text].map(ch=> /\d/.test(ch)
+    ? `<span class="slot" data-d="${ch}"><span class="slot-reel" style="transform:translateY(${-slotBase(+ch,down)}em)">${[...SLOT_REEL].map(x=>`<span>${x}</span>`).join('')}</span></span>`
+    : `<span class="slot-sep">${ch}</span>`).join('');
+}
+function snapSlot(slot, down){
+  if(!slot.dataset.wrapped) return;
+  const reel = slot.firstElementChild;
+  reel.style.transition = 'none';
+  reel.style.transform = `translateY(${-slotBase(+slot.dataset.d,down)}em)`;
+  void reel.offsetHeight;
+  reel.style.transition = '';
+  delete slot.dataset.wrapped;
+}
+function paintSlotClock(node, text, down){
+  node.setAttribute('aria-label', text);
+  const shape = slotShape(text);
+  if(node.dataset.shape !== shape){
+    node.dataset.shape = shape;
+    node.innerHTML = slotClockHtml(text, down);
+    return;
+  }
+  [...text].forEach((ch,i)=>{
+    const slot = node.children[i];
+    if(!/\d/.test(ch) || slot.dataset.d===ch) return;
+    snapSlot(slot, down);
+    const prev = +slot.dataset.d, next = +ch;
+    const reel = slot.firstElementChild;
+    slot.dataset.d = ch;
+    if(down ? next<prev : next>prev){ reel.style.transform = `translateY(${-slotBase(next,down)}em)`; return; }
+    slot.dataset.wrapped = '1';
+    reel.style.transform = `translateY(${-(down ? next : 10+next)}em)`;
+    reel.addEventListener('transitionend', ()=> snapSlot(slot, down), {once:true});
+  });
+}
 
 /* Renders the logged sets of one exercise. Used by the workout screen
    (editable) and by history (read-only). */
@@ -480,7 +557,7 @@ async function scheduleRestNotification(exerciseId, seconds, exerciseName){
     const id = restNotificationId(exerciseId);
     const at = new Date(Date.now()+waitMs);
     const exact = await exactAlarmStatus();
-    /* Denied exact alarms must not be requested again here: Capacitor 8.3
+    /* Denied exact alarms must not be requested again here: LocalNotifications
        opens Alarms & reminders on every exact schedule until the user allows it. */
     const schedule = {at, allowWhileIdle:true, isExactNotification: exact!=='denied'};
     LocalNotifications.cancel({notifications:[{id}]}).catch(()=>{}).finally(()=>{
@@ -550,7 +627,7 @@ async function startRestTimer(exerciseId, seconds, exerciseName){
   if(restTimers[exerciseId]) cancelRestNotification(exerciseId);
   restTimers[exerciseId] = {end: Date.now()+seconds*1000, seconds, name: exerciseName};
   if(!restTicker) restTicker = setInterval(tickRestTimers, 250);
-  renderApp();
+  refreshTimerBar();
   if(DATA.settings.restNotify){
     const ok = await ensureRestNotifyPermission();
     if(ok) await scheduleRestNotification(exerciseId, seconds, exerciseName);
@@ -562,9 +639,9 @@ function extendRestTimer(exerciseId, extraSeconds){
   const t = restTimers[exerciseId]; if(!t) return;
   t.end += extraSeconds*1000; t.seconds += extraSeconds;
   if(DATA.settings.restNotify) scheduleRestNotification(exerciseId, Math.max(1, Math.round((t.end-Date.now())/1000)), t.name);
-  renderApp();
+  refreshTimerBar();
 }
-function stopRestTimer(exerciseId){ cancelRestNotification(exerciseId); delete restTimers[exerciseId]; renderApp(); }
+function stopRestTimer(exerciseId){ cancelRestNotification(exerciseId); delete restTimers[exerciseId]; refreshTimerBar(); }
 function tickRestTimers(){
   const now = Date.now();
   let expired = false;
@@ -578,51 +655,41 @@ function tickRestTimers(){
       delete restTimers[id];
       expired = true;
     } else {
-      if(node) node.textContent = restRemainingText(id);
+      if(node) paintSlotClock(node, restRemainingText(id), true);
       if(fill) fill.style.width = `${restProgressPct(id)}%`;
     }
   });
   if(!Object.keys(restTimers).length){ clearInterval(restTicker); restTicker = null; }
   if(expired){
     if(!document.hidden) alertRestEndedSecondary();
-    if(VIEW==='today') renderApp();
+    refreshTimerBar();
   }
 }
 
-function restCardEl(exerciseId){
-  const pct = restProgressPct(exerciseId);
-  const card = el(`
-    <div class="rest-card is-running">
-      <div class="rest-top">
-        <span class="rest-label">Resting</span>
-        <span class="rest-time" data-restcountdown="${exerciseId}">${restRemainingText(exerciseId)}</span>
-      </div>
-      <div class="rest-track"><div class="rest-fill" data-restfill="${exerciseId}" style="width:${pct}%"></div></div>
-      <div class="rest-actions">
-        <button class="btn secondary" data-extend>+30s</button>
-        <button class="btn" data-skip>Skip rest</button>
-      </div>
-    </div>`);
-  q('[data-extend]',card).onclick = ()=> extendRestTimer(exerciseId, 30);
-  q('[data-skip]',card).onclick = ()=> stopRestTimer(exerciseId);
-  return card;
-}
-/* Idle state: one "Start rest" button for the whole workout, sized to the
-   Settings default (or a plan-row override when one is passed), plus quick alternates. */
-function restStartRowEl(planRow, exerciseName){
+/* Rest buttons for the workout timer bar. Resting: +30s and Skip.
+   Idle: "Rest" at planRow's rest (or the Settings default) plus quick alternates. */
+function restControlsEl(exerciseId, planRow, exerciseName){
+  const row = el(`<div class="tb-rest"></div>`);
+  if(restTimers[exerciseId]){
+    const extend = el(`<button class="btn secondary">+30s</button>`);
+    const skip = el(`<button class="btn">Skip rest</button>`);
+    extend.onclick = ()=> extendRestTimer(exerciseId, 30);
+    skip.onclick = ()=> stopRestTimer(exerciseId);
+    row.append(extend, skip);
+    return row;
+  }
   const seconds = restSecondsFor(planRow);
-  if(seconds===0) return el(`<p class="faint small">No rest programmed — go when ready.</p>`);
-  const wrap = el(`<div class="rest-idle"></div>`);
-  const main = el(`<button class="btn rest-start">Start rest · ${formatMinSec(seconds)}</button>`);
-  main.onclick = ()=> startRestTimer(planRow.exerciseId, seconds, exerciseName);
-  wrap.appendChild(main);
-  const alts = el(`<div class="rest-alts"></div>`);
+  const name = exerciseName || '';
+  if(seconds>0){
+    const main = el(`<button class="btn tb-main">${icon('timer',15)} Rest ${formatMinSec(seconds)}</button>`);
+    main.onclick = ()=> startRestTimer(exerciseId, seconds, name);
+    row.appendChild(main);
+  }
   [60,90,120].filter(s=>s!==seconds).forEach(s=>{
     const b = el(`<button class="btn secondary">${formatMinSec(s)}</button>`);
-    b.onclick = ()=> startRestTimer(planRow.exerciseId, s, exerciseName);
-    alts.appendChild(b);
+    b.onclick = ()=> startRestTimer(exerciseId, s, name);
+    row.appendChild(b);
   });
-  wrap.appendChild(alts);
-  return wrap;
+  return row;
 }
 

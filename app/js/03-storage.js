@@ -10,7 +10,7 @@ function units(){ return 'kg'; }
 function makeExercise(c){
   return {id:uid(), name:c.name, catalogKey:c.name, primary:c.primary, muscleGroup:c.primary, secondary:(c.secondary||[]).slice(),
     pattern:c.pattern||'other', equipment:c.equipment||'other', equipmentNote:'', tier:c.tier||'isolation',
-    metric:c.metric||'weight_reps', popularity:c.popularity||50, notes:'', userAdded:false, flagged:false, metaVersion:2};
+    metric:c.metric||'weight_reps', popularity:c.popularity||50, notes:'', userAdded:false, flagged:false, loadStep:null, metaVersion:2};
 }
 function seedExercises(){ return CATALOG.map(makeExercise); }
 function guessEquipment(text){
@@ -72,7 +72,13 @@ function seedSplits(exercises){
   };
 }
 
-/* God's Plan (PPL-UL): the split new installs start on, and a built-in preset. */
+/* God's Plan (PPL-UL): the split new installs start on, and a built-in preset.
+   `sets` are working sets; the warm-up note asks for one extra set before them. */
+function warmupNote(reps){ return `Warm-up set first, x${reps}`; }
+const OLD_WARMUP_NOTE = /^Set 1 warmup x(\d+)/;
+function upgradeWarmupNote(row){
+  if(row && typeof row.notes==='string') row.notes = row.notes.replace(OLD_WARMUP_NOTE, (_,n)=> warmupNote(n));
+}
 function godsPlanRow(exercises, name, sets, repsMin, repsMax, restSeconds, notes, supersetId){
   const ex = exercises.find(x=>x.name===name);
   if(!ex) return null;
@@ -83,7 +89,7 @@ function godsPlanRow(exercises, name, sets, repsMin, repsMax, restSeconds, notes
 }
 function buildGodsPlanSplit(exercises){
   const R = (name, sets, a, b, rest, notes, ss)=> godsPlanRow(exercises, name, sets, a, b, rest, notes, ss);
-  const wu = n => `Set 1 warmup x${n}`;
+  const wu = n => warmupNote(n);
   const friArms = 'godsplan-fri-arms';
   const days = {
     mon:{name:'Chest & Triceps', exercises:[
@@ -123,7 +129,7 @@ function buildGodsPlanSplit(exercises){
       R('Dumbbell Shoulder Press',2,8,10,90,wu(8)+' · seated'),
       R('Chest-Supported Row',2,8,10,90,wu(8)),
       R('Lateral Raise',2,12,15,45,null),
-      R('Face Pull',2,15,15,45,null),
+      R('Face Pull',2,12,15,45,null),
       R('EZ-Bar Curl',2,10,12,45,'Superset with Rope Pushdown',friArms),
       R('Rope Pushdown',2,10,12,45,'Superset with EZ-Bar Curl',friArms)
     ].filter(Boolean)},
@@ -147,7 +153,7 @@ const BUILTIN_PRESETS = [
   {id:'builtin-ppl',       name:'PPL',        subtitle:'Push, pull, legs, twice a week',        build:ex=> seedSplits(ex).ppl},
   {id:'builtin-pplul',     name:'PPL + UL',   subtitle:'Push, pull, legs, core, upper, lower',  build:ex=> seedSplits(ex).pplul}
 ];
-const PRESETS_VERSION = 2;
+const PRESETS_VERSION = 3;
 function ensureBuiltinPresets(data){
   data.presets = data.presets || [];
   const s = data.settings = data.settings || {};
@@ -201,11 +207,12 @@ function defaultSettings(){
   const goal = TRAINING.goals.hypertrophy;
   return { units:'kg', userName:DEFAULT_USER_NAME, goal:'hypertrophy',
     overload:{ repsToEarnIncrease:goal.repsToEarnIncrease, sessionsRequired:goal.sessionsRequired },
-    restDefaultMinutes:3, restNotify:true, restVibrate:true,
+    restDefaultMinutes:3, restNotify:true, restVibrate:true, restAutoStart:true, keepScreenOn:true,
     restSetupAsked:false, restBatteryHintDismissed:false,
     weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], presetsVersion:0,
-    defaultPlanSets:2 };
+    defaultPlanSets:2, onboarded:false, gender:'unspecified', weightedBwMigrated:true };
 }
+const GENDERS = ['unspecified','male','female'];
 function defaultSplits(exercises){ return { main: buildGodsPlanSplit(exercises) }; }
 function defaultData(){
   const exercises = seedExercises();
@@ -237,6 +244,9 @@ function migrate(data){
   const s = data.settings = data.settings || {};
   s.units = 'kg';
   if(typeof s.userName !== 'string' || !s.userName.trim()) s.userName = DEFAULT_USER_NAME;
+  // Saves from before the welcome screen existed belong to existing users.
+  if(typeof s.onboarded !== 'boolean') s.onboarded = true;
+  if(!GENDERS.includes(s.gender)) s.gender = 'unspecified';
   if(!TRAINING.goals[s.goal]) s.goal = 'hypertrophy';
   const preset = TRAINING.goals[s.goal];
   s.overload = s.overload || {};
@@ -245,6 +255,8 @@ function migrate(data){
   if(typeof s.restDefaultMinutes !== 'number') s.restDefaultMinutes = 3;
   if(typeof s.restNotify !== 'boolean') s.restNotify = true;
   if(typeof s.restVibrate !== 'boolean') s.restVibrate = true;
+  if(typeof s.restAutoStart !== 'boolean') s.restAutoStart = true;
+  if(typeof s.keepScreenOn !== 'boolean') s.keepScreenOn = true;
   if(typeof s.restSetupAsked !== 'boolean') s.restSetupAsked = false;
   if(typeof s.restBatteryHintDismissed !== 'boolean') s.restBatteryHintDismissed = false;
   if(!DAY_KEYS.includes(s.weighInDay)) s.weighInDay = 'mon';
@@ -294,9 +306,24 @@ function migrate(data){
     if(!e.metric) e.metric = 'weight_reps';
     if(!e.equipmentNote) e.equipmentNote = '';
     if(typeof e.flagged !== 'boolean') e.flagged = false;
+    if(typeof e.loadStep !== 'number' || !(e.loadStep > 0)) e.loadStep = null;
     if(!MUSCLES.includes(e.primary)) e.primary = LEGACY_MUSCLE_MAP[e.primary] || 'Other';
     e.muscleGroup = e.primary; // legacy alias kept in sync
   });
+
+  if(!data.settings.weightedBwMigrated){
+    const moved = new Set();
+    data.exercises.forEach(e=>{
+      const key = String(e.catalogKey || e.name || '').trim().toLowerCase();
+      if(e.metric==='reps_only' && WEIGHTED_BW_MOVES.has(key)){ e.metric = 'weighted_bw'; moved.add(e.id); }
+    });
+    (Array.isArray(data.logs) ? data.logs : []).forEach(log=> (log.sets||[]).forEach(set=>{
+      if(!set || !moved.has(set.exerciseId)) return;
+      if(typeof set.weight !== 'number') set.weight = 0;
+      (set.stages||[]).forEach(st=>{ if(st && typeof st.weight !== 'number') st.weight = 0; });
+    }));
+    data.settings.weightedBwMigrated = true;
+  }
 
   /* top up the library with catalog movements the user doesn't have */
   const known = new Set();
@@ -314,6 +341,7 @@ function migrate(data){
       split.days[dk].exercises.forEach(row=>{
         if(typeof row.rpe === 'undefined') row.rpe = null;
         if(typeof row.notes !== 'string') row.notes = '';
+        upgradeWarmupNote(row);
         if(!row.sets) row.sets = 3;
         if(!row.repsMin) row.repsMin = 8;
         if(!row.repsMax) row.repsMax = 12;
@@ -338,18 +366,19 @@ function migrate(data){
     if(typeof log.completed !== 'boolean') log.completed = log.sets.length>0;
     if(typeof log.startedAt === 'undefined') log.startedAt = null;
     if(typeof log.endedAt === 'undefined') log.endedAt = null;
-    /* elapsedMs is foreground time only. timerRunningSince is never trusted
-       across a launch: a killed WebView must not add the time the app was closed. */
+    /* The workout clock is wall time. An active log keeps timerRunningSince
+       across a relaunch; maybeTrimAwayTime removes long idle gaps. */
     if(typeof log.elapsedMs !== 'number' || !isFinite(log.elapsedMs) || log.elapsedMs<0){
       log.elapsedMs = (!log.active && log.startedAt && log.endedAt) ? Math.max(0, log.endedAt - log.startedAt) : 0;
     }
-    log.timerRunningSince = null;
+    if(!log.active || typeof log.timerRunningSince!=='number' || !isFinite(log.timerRunningSince)) log.timerRunningSince = null;
     if(typeof log.plan === 'undefined') log.plan = null;
     if(typeof log.planName !== 'string') log.planName = '';
     if(!Array.isArray(log.queued)) log.queued = [];
     else log.queued = log.queued.filter(row=>row && row.exerciseId);
     if(!Array.isArray(log.hiddenExerciseIds)) log.hiddenExerciseIds = [];
     if(Array.isArray(log.plan)) log.plan.forEach(row=>{
+      upgradeWarmupNote(row);
       if(typeof row.supersetId === 'undefined') row.supersetId = null;
       if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
       if(typeof row.restSeconds === 'undefined') row.restSeconds = null;
@@ -366,6 +395,7 @@ function migrate(data){
       (p.split.days[dk] && p.split.days[dk].exercises || []).forEach(row=>{
         if(typeof row.rpe === 'undefined') row.rpe = null;
         if(typeof row.notes !== 'string') row.notes = '';
+        upgradeWarmupNote(row);
         if(!row.sets) row.sets = 3;
         if(!row.repsMin) row.repsMin = 8;
         if(!row.repsMax) row.repsMax = 12;

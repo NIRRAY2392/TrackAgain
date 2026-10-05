@@ -9,8 +9,8 @@ function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix){
   const weightId = metricFieldId(idPrefix,'fldWeight');
   const repsId = metricFieldId(idPrefix,'fldReps');
   const secsId = metricFieldId(idPrefix,'fldSecs');
-  if(metric==='weight_reps' || metric==='assisted'){
-    const label = metric==='assisted' ? 'Assistance (kg)' : 'Weight (kg)';
+  if(hasLoadField(metric)){
+    const label = metric==='assisted' ? 'Assistance (kg)' : metric==='weighted_bw' ? 'Added weight (kg, 0 = bodyweight)' : 'Weight (kg)';
     return `<div class="grid2">
         <div class="field"><label>${label}</label><input id="${weightId}" type="number" step="0.5" min="0" inputmode="decimal" value="${weight}" placeholder="e.g. 60"></div>
         <div class="field"><label>Reps</label><input id="${repsId}" type="number" min="1" inputmode="numeric" value="${reps}" placeholder="e.g. 8"></div>
@@ -22,7 +22,7 @@ function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix){
   return '';
 }
 function readMetricFields(metric, root, idPrefix){
-  if(metric==='weight_reps' || metric==='assisted'){
+  if(hasLoadField(metric)){
     const weightEl = q('#'+metricFieldId(idPrefix,'fldWeight'),root);
     const repsEl = q('#'+metricFieldId(idPrefix,'fldReps'),root);
     if(!weightEl || !repsEl) return null;
@@ -333,7 +333,7 @@ function openLogSetSheet(opts){
             if(holdSaveForLowRepWarning()) return;
             const values = readMetricFields(metric, wrap);
             if(!values){ showToast('Enter valid numbers'); return; }
-            const intent = !isWarmup && (metric==='weight_reps'||metric==='assisted') && strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
+            const intent = !isWarmup && hasLoadField(metric) && strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
             saveNormalSet(values, intent);
           } else {
             const finalStages = [];
@@ -361,7 +361,7 @@ function supersetSeed(planRow){
   const sample = lastToday || (lastBits && lastBits.set);
   const planned = loadPlanFor(planRow.exerciseId);
   const seed = {weight:'', reps:'', duration:''};
-  if(metric==='weight_reps' || metric==='assisted'){
+  if(hasLoadField(metric)){
     const weight = planned && planned.weight!=null ? planned.weight : (sample && sample.weight!=null ? sample.weight : '');
     seed.weight = weight;
     seed.reps = sample && sample.reps!=null ? sample.reps : '';
@@ -473,7 +473,7 @@ function openSupersetLogSheet(members){
         const log = todayLog();
         persistLog(log);
         const saved = pending.map(({block, values})=>{
-          const intent = !warmup && (block.metric==='weight_reps'||block.metric==='assisted') && block.strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
+          const intent = !warmup && hasLoadField(block.metric) && block.strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
           const set = {id:uid(), exerciseId:block.row.exerciseId, difficulty:block.effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:warmup, ...values};
           log.sets.push(set);
           recomputePRs(block.row.exerciseId);
@@ -500,22 +500,22 @@ function openLoadAdjustSheet(status){
     build:(body)=>{
       body.appendChild(el(`
         <div>
-          <p class="faint small">Last session: ${status.referenceWeight}${units()}${status.suggestedWeight!=null?` · suggested ${status.suggestedWeight}${units()}`:''}</p>
+          <p class="faint small">Last session: ${loadLabel(status.referenceWeight||0, status.metric)}${status.suggestedWeight!=null?` · suggested ${loadLabel(status.suggestedWeight, status.metric)}`:''}</p>
           <div class="stepper">
             <button data-minus>−</button>
-            <span class="v" data-value>${weight}${units()}</span>
+            <span class="v" data-value>${loadLabel(weight, status.metric)}</span>
             <button data-plus>+</button>
           </div>
           <button class="btn" data-use style="width:100%;">Use this weight today</button>
           <button class="btn secondary" data-clear style="width:100%;margin-top:10px;">Clear — decide at the rack</button>
         </div>`));
       const label = q('[data-value]',body);
-      const paint = ()=> label.textContent = `${weight}${units()}`;
+      const paint = ()=> label.textContent = loadLabel(weight, status.metric);
       q('[data-minus]',body).onclick = ()=>{ weight = Math.max(0, roundTo(weight-step,2)); paint(); };
       q('[data-plus]',body).onclick  = ()=>{ weight = roundTo(weight+step,2); paint(); };
       q('[data-use]',body).onclick = ()=>{
         setLoadPlan(status.exerciseId, {weight, deferred:false});
-        closeSheets(); showToast(`Target set: ${weight}${units()}`); renderApp();
+        closeSheets(); showToast(`Target set: ${loadLabel(weight, status.metric)}`); renderApp();
       };
       q('[data-clear]',body).onclick = ()=>{
         clearLoadPlan(status.exerciseId);
@@ -631,6 +631,9 @@ function openExerciseFormSheet(opts){
           <div class="field"><label>How is it measured?</label><select id="exMetric" ${metricLocked?'disabled':''}>
             ${Object.keys(METRIC_LABELS).map(k=>option(k,METRIC_LABELS[k],(ex?metricOf(ex):'weight_reps')===k)).join('')}</select>
             ${metricLocked?'<p class="faint small" style="margin-top:6px;">Locked because this exercise already has logged sets.</p>':''}</div>
+          <div class="field"><label>Weight jump (kg, optional)</label>
+            <input id="exLoadStep" type="number" min="0" step="0.25" inputmode="decimal" value="${ex && ex.loadStep>0 ? ex.loadStep : ''}">
+            <p class="faint small" style="margin-top:6px;">The smallest weight change your gym has for this. Leave empty to use the equipment default.</p></div>
           <div class="field"><label>Also works (optional)</label><div class="row wrap" data-secondary style="gap:6px;"></div></div>
           <div class="field"><label>Note (optional)</label><input id="exNote" placeholder="e.g. seat setting 4, wide grip" value="${escapeHtml(ex?(ex.equipmentNote||''):'')}"></div>
           <label class="row" style="gap:8px;margin:12px 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
@@ -651,6 +654,10 @@ function openExerciseFormSheet(opts){
         });
       };
       paintSecondary();
+      const equipSelect = q('#exEquip',body), stepInput = q('#exLoadStep',body);
+      const paintStepHint = ()=>{ stepInput.placeholder = `Default ${loadStepFor({equipment:equipSelect.value})} kg`; };
+      equipSelect.addEventListener('change', paintStepHint);
+      paintStepHint();
 
       q('[data-save]',body).onclick = ()=>{
         const name = q('#exName',body).value.trim();
@@ -659,6 +666,9 @@ function openExerciseFormSheet(opts){
           showToast('You already have that exercise'); return;
         }
         const primary = q('#exMuscle',body).value;
+        const stepRaw = stepInput.value.trim();
+        const loadStep = stepRaw==='' ? null : roundTo(parseFloat(stepRaw), 2);
+        if(loadStep!==null && !(loadStep>0 && loadStep<=50)){ showToast('Weight jump must be between 0 and 50 kg'); return; }
         const fields = {
           name, primary, muscleGroup:primary,
           secondary:[...selected].filter(m=>m!==primary),
@@ -667,6 +677,7 @@ function openExerciseFormSheet(opts){
           equipmentNote:q('#exNote',body).value.trim(),
           tier:q('#exTier',body).value,
           metric:q('#exMetric',body).value,
+          loadStep,
           flagged:q('#exFlag',body).checked
         };
         let id;
@@ -688,10 +699,21 @@ function openExerciseFormSheet(opts){
         if(hasHistory(ex.id)){ showToast("Can't delete — you have sets logged for this"); return; }
         confirmAction(`Remove ${ex.name} from your library?`, 'Remove', ()=>{
           DATA.exercises = DATA.exercises.filter(e=>e.id!==ex.id);
-          Object.values(DATA.splits).forEach(split=> DAY_KEYS.forEach(dk=>{
-            split.days[dk].exercises = split.days[dk].exercises.filter(r=>r.exerciseId!==ex.id);
-          }));
-          DATA.logs.forEach(log=>{ if(Array.isArray(log.plan)) log.plan = log.plan.filter(r=>r.exerciseId!==ex.id); });
+          const strip = rows=>{
+            const kept = (rows||[]).filter(r=>r.exerciseId!==ex.id);
+            dissolveTinySupersets(kept);
+            return kept;
+          };
+          const stripSplit = split=> DAY_KEYS.forEach(dk=>{
+            const day = split && split.days && split.days[dk];
+            if(day) day.exercises = strip(day.exercises);
+          });
+          Object.values(DATA.splits).forEach(stripSplit);
+          (DATA.presets||[]).forEach(p=> stripSplit(p.split));
+          DATA.logs.forEach(log=>{
+            if(Array.isArray(log.plan)) log.plan = strip(log.plan);
+            if(Array.isArray(log.queued)) log.queued = strip(log.queued);
+          });
           saveData(DATA);
           closeSheets();
           showToast('Removed');
@@ -972,6 +994,7 @@ function openDayEditor(dayKey){
           btn.onclick = ()=>{
             const groupId = uid();
             draft.exercises.forEach((r,i)=>{ if(selected.has(i)) r.supersetId = groupId; });
+            dissolveTinySupersets(draft.exercises);
             selected = new Set();
             dirty = true; draw();
           };
@@ -1308,7 +1331,7 @@ function sessionBestValue(sets, metric){
     const a = setPerformanceScore(s,metric), c = setPerformanceScore(b,metric);
     return (higher ? a>c : a<c) ? s : b;
   }, normal[0]);
-  if(metric==='weight_reps') return roundTo(estimateOneRepMax(best.weight,best.reps));
+  if(metric==='weight_reps' || metric==='weighted_bw') return roundTo(setPerformanceScore(best, metric));
   if(metric==='reps_only')   return best.reps;
   if(metric==='time')        return best.duration;
   return best.weight; // assisted
@@ -1316,7 +1339,7 @@ function sessionBestValue(sets, metric){
 function sessionChipText(sets, metric){
   const value = sessionBestValue(sets, metric);
   if(value==null) return '🔻 Drop set';
-  if(metric==='weight_reps') return `e1RM ${value}${units()}`;
+  if(metric==='weight_reps' || metric==='weighted_bw') return `e1RM ${value}${units()}`;
   if(metric==='reps_only')   return `${value} reps`;
   if(metric==='time')        return `${value}s`;
   return `${value}${units()} assist`;
@@ -1399,6 +1422,7 @@ function openExerciseDetailSheet(exerciseId, opts){
         const ordered = [...sessions].reverse();
         const styles = getComputedStyle(document.documentElement);
         const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
+          : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
           : metric==='reps_only' ? 'Best reps' : metric==='time' ? 'Best hold (s)' : `Assistance used (${units()})`;
         new Chart(canvas.getContext('2d'), {
           type:'line',
@@ -1495,9 +1519,9 @@ function prDeltaText(prev, cur, metric){
   if(!prev) return 'First PR';
   const a = prev.set, b = cur.set, parts = [];
   const reps = (n)=> prSignedText(n, Math.abs(n)===1 ? ' rep' : ' reps');
-  if(metric==='weight_reps' || metric==='assisted'){
+  if(hasLoadField(metric)){
     const dw = (b.weight||0)-(a.weight||0), dr = (b.reps||0)-(a.reps||0);
-    if(dw) parts.push(prSignedText(dw, ` ${units()}${metric==='assisted'?' assist':''}`));
+    if(dw) parts.push(prSignedText(dw, ` ${units()}${metric==='assisted'?' assist':metric==='weighted_bw'?' added':''}`));
     if(dr) parts.push(reps(dr));
   } else if(metric==='reps_only'){
     const dr = (b.reps||0)-(a.reps||0);
@@ -1510,7 +1534,7 @@ function prDeltaText(prev, cur, metric){
 }
 function prChartPoint(moment, metric){
   const set = moment.set;
-  if(metric==='weight_reps') return roundTo(estimateOneRepMax(set.weight, set.reps));
+  if(metric==='weight_reps' || metric==='weighted_bw') return roundTo(setPerformanceScore(set, metric));
   if(metric==='reps_only') return set.reps;
   if(metric==='time') return set.duration;
   return set.weight;
@@ -1518,7 +1542,7 @@ function prChartPoint(moment, metric){
 function prOverallGain(moments, metric){
   if(moments.length<2) return {value:'—', label:'Progress'};
   const first = prChartPoint(moments[0], metric), last = prChartPoint(moments[moments.length-1], metric);
-  if(metric==='weight_reps') return {value:prSignedText(last-first, ` ${units()}`), label:'Est. 1RM gain'};
+  if(metric==='weight_reps' || metric==='weighted_bw') return {value:prSignedText(last-first, ` ${units()}`), label:'Est. 1RM gain'};
   if(metric==='reps_only')   return {value:prSignedText(last-first, ''), label:'Reps gained'};
   if(metric==='time')        return {value:prSignedText(last-first, 's'), label:'Hold gained'};
   return {value:prSignedText(last-first, ` ${units()}`), label:'Assist change'};
@@ -1568,8 +1592,9 @@ function openRecordsPrSheet(exerciseId){
       }
       const gain = prOverallGain(moments, metric);
       const sinceDays = daysInclusive(current.date, todayKey()) - 1;
-      const oneRm = metric==='weight_reps' ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
+      const oneRm = (metric==='weight_reps' || metric==='weighted_bw') ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
       const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
+        : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
         : metric==='reps_only' ? 'Best reps' : metric==='time' ? 'Longest hold (s)' : `Assistance (${units()}) · lower is better`;
       body.appendChild(el(`
         <div>
@@ -1982,7 +2007,7 @@ function historyWorkoutRow(log){
   const row = el(`
     <div class="hist-day" style="cursor:pointer;">
       <strong>${escapeHtml(when)}</strong>${dayName?` · ${escapeHtml(dayName)}`:''} ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
-      <div class="faint small">${log.sets.length} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${formatDuration(dur)}`:''}</div>
+      <div class="faint small">${workingSetCount(log.sets)} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${formatDuration(dur)}`:''}</div>
     </div>`);
   row.onclick = ()=> openHistoryDaySheet(log.date);
   return row;
@@ -2001,7 +2026,7 @@ function recentWorkoutRow(log, isLatest){
       </div>
       <div class="recent-main">
         <div class="nm">${escapeHtml(dayName)}</div>
-        <div class="faint small">${escapeHtml(when)} · ${log.sets.length} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
+        <div class="faint small">${escapeHtml(when)} · ${workingSetCount(log.sets)} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
       </div>
       ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
       <span class="recent-go">${icon('chevronRight',18)}</span>
@@ -2267,15 +2292,16 @@ function trainingGuideSections(){
       <ul>
         <li>Barbell or Smith machine: ${eq.barbell} kg</li>
         <li>Dumbbell: ${eq.dumbbell} kg · Kettlebell: ${eq.kettlebell} kg</li>
-        <li>Cable or machine: ${eq.cable} kg</li>
+        <li>Cable or machine: ${eq.cable} kg · Weighted bodyweight: ${eq.bodyweight} kg</li>
       </ul>
-      <p>The result is rounded to that equipment step, so a 20 kg dumbbell goes to 21 kg. Assisted exercises lower the assistance by ${L.assistanceStepKg} kg instead.</p>`},
+      <p>The result is rounded to that step, so a 20 kg dumbbell curl goes to ${nextLoadFor({equipment:'dumbbell', primary:'Biceps'}, 20)} kg (dumbbell weights are per hand). If your gym's jumps are different, set "Weight jump" when editing the exercise. Assisted exercises lower the assistance by ${L.assistanceStepKg} kg instead.</p>`},
     {key:'lower', title:'When does it tell me to lower the weight?', body:`
       <p>When your reps fall below the bottom of the exercise's range, the weight is too heavy for your goal. For example, 82.5 kg × 4 when the range is 6–10.</p>
       <ul>
         <li><b>During the workout</b> the box suggests a lighter weight for your next set straight away. Tap <b>Use</b> and the steppers jump to it.</li>
         <li><b>Next session</b>, if every set last time was below the range, the box opens with "Drop to …".</li>
       </ul>
+      <p>Right after a weight increase, falling up to ${L.newLoadRepGrace} reps short of the range is expected, so the app tells you to stay and build the reps back instead.</p>
       <p>The new weight is estimated from your set (using the same estimated one-rep max as PRs), aiming for the bottom of the range, and rounded down to the equipment step. Staying in range matters more than the number on the bar.</p>`},
     {key:'goals', title:'Hypertrophy, Strength and Endurance', body:`
       ${Object.entries(TRAINING.goals).map(([key,g])=>`
@@ -2298,7 +2324,7 @@ function trainingGuideSections(){
       <ul>
         <li><b>Warm-ups</b> don't count for PRs, overload or effective sets. Use the Warm-up switch so they don't drag your numbers down.</li>
         <li><b>Drop sets</b> count toward effective sets (by their first stage) but not PRs or overload.</li>
-        <li><b>PRs</b> use an estimated one-rep max, so 80 kg × 10 can beat 85 kg × 6.</li>
+        <li><b>PRs</b> use an estimated one-rep max, so 80 kg × 10 can beat 85 kg × 6, and an extra rep at the same weight is a PR. Your first set of an exercise is the baseline; beating it earns the first trophy.</li>
       </ul>`},
     {key:'bodyweight', title:'Bodyweight and timed exercises', body:`
       <p>There's no weight to add, so the app asks for more reps (+1, or +2 if it felt easy) or a longer hold (+10 s, or +15 s if easy). If it felt hard, just match last time.</p>`},
@@ -2307,7 +2333,7 @@ function trainingGuideSections(){
 
 function openTrainingGuideSheet(openKey){
   openSheet({
-    title:'Training guide',
+    title:"FAQ's",
     build:(body)=>{
       const wrap = el(`
         <div class="guide">
@@ -2340,10 +2366,19 @@ function renderSettingsScreen(){
 
   const nameCard = el(`
     <div class="card">
-      <div class="field" style="margin:0;"><label>Your name</label><input id="userName" value="${escapeHtml(DATA.settings.userName||DEFAULT_USER_NAME)}" placeholder="Your name"></div>
+      <div class="field"><label>Your name</label><input id="userName" value="${escapeHtml(DATA.settings.userName||DEFAULT_USER_NAME)}" placeholder="Your name"></div>
+      <div class="field" style="margin:0;"><label>Gender</label>
+        <select id="userGender">
+          ${[['unspecified','Prefer not to say'],['male','Male'],['female','Female']].map(([v,l])=>`<option value="${v}" ${DATA.settings.gender===v?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
     </div>`);
   q('#userName',nameCard).onchange = (e)=>{
     DATA.settings.userName = e.target.value.trim() || DEFAULT_USER_NAME;
+    saveData(DATA);
+  };
+  q('#userGender',nameCard).onchange = (e)=>{
+    DATA.settings.gender = GENDERS.includes(e.target.value) ? e.target.value : 'unspecified';
     saveData(DATA);
   };
   wrap.appendChild(nameCard);
@@ -2386,7 +2421,7 @@ function renderSettingsScreen(){
         <div class="field"><label>Reps before more weight</label><input id="repsToEarn" type="number" min="3" max="30" inputmode="numeric" value="${goal.repsToEarnIncrease}"></div>
         <div class="field"><label>Clean sessions needed</label><input id="sessionsNeeded" type="number" min="1" max="5" inputmode="numeric" value="${goal.sessionsRequired}"></div>
       </div>
-      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit ${goal.repsToEarnIncrease} reps (or the top of that exercise's programmed rep range, if lower), including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()}, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}).</p>
+      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit ${goal.repsToEarnIncrease} reps (or the top of that exercise's programmed rep range, if lower), including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()} each, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}) unless an exercise has its own weight jump.</p>
     </div>`);
   q('#defaultPlanSets',trainingCard).onchange = (e)=>{
     const before = defaultPlanSets();
@@ -2426,11 +2461,11 @@ function renderSettingsScreen(){
   };
   wrap.appendChild(trainingCard);
 
-  wrap.appendChild(el(`<div class="section-title">Training guide</div>`));
+  wrap.appendChild(el(`<div class="section-title">FAQ's</div>`));
   const guideCard = el(`
     <div class="card guide-card">
       <p class="small muted">How the app decides when to add or lower weight, what a qualifying session is, and what each goal means.</p>
-      <button class="btn secondary" data-guide style="width:100%;margin-top:10px;">${icon('info',16)} Open training guide</button>
+      <button class="btn secondary" data-guide style="width:100%;margin-top:10px;">${icon('info',16)} Open FAQ's</button>
     </div>`);
   q('[data-guide]',guideCard).onclick = ()=> openTrainingGuideSheet();
   wrap.appendChild(guideCard);
@@ -2444,6 +2479,14 @@ function renderSettingsScreen(){
         </select>
       </div>
       <p class="faint small" style="margin-bottom:10px;">Any exercise can override this with its own rest time in the Split day editor.</p>
+      <label class="row" style="gap:8px;margin:10px 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
+        <input type="checkbox" id="restAutoStart" style="width:auto;" ${DATA.settings.restAutoStart?'checked':''}>
+        <span>Start rest automatically after each set</span>
+      </label>
+      <label class="row" style="gap:8px;margin:10px 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
+        <input type="checkbox" id="keepScreenOn" style="width:auto;" ${DATA.settings.keepScreenOn?'checked':''}>
+        <span>Keep screen on during a workout</span>
+      </label>
       <label class="row" style="gap:8px;margin:10px 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
         <input type="checkbox" id="restNotify" style="width:auto;" ${DATA.settings.restNotify?'checked':''}>
         <span>System notification when rest ends (over other apps)</span>
@@ -2478,6 +2521,12 @@ function renderSettingsScreen(){
     renderApp();
   };
   q('#restVibrate',restCard).onchange = (e)=>{ DATA.settings.restVibrate = e.target.checked; saveData(DATA); };
+  q('#restAutoStart',restCard).onchange = (e)=>{ DATA.settings.restAutoStart = e.target.checked; saveData(DATA); };
+  q('#keepScreenOn',restCard).onchange = (e)=>{
+    DATA.settings.keepScreenOn = e.target.checked;
+    saveData(DATA);
+    setScreenAwake(!!activeWorkoutLog() && !document.hidden);
+  };
   wrap.appendChild(restCard);
 
   wrap.appendChild(el(`<div class="section-title">Exercise Library</div>`));

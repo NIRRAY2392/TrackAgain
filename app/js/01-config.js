@@ -28,8 +28,8 @@ const TRAINING = {
   secondaryMuscleShare: 0.5,     // a secondary muscle banks half an effective set
   weeklyEffectiveSetTarget: 12,  // reference line for the per-muscle bars
 
-  /* Load progression. Increases are a % of current load, rounded to the plate step,
-     and never smaller than minIncrementKg. */
+  /* Load progression. Increases are a % of current load, rounded to the equipment
+     step (or the exercise's own loadStep) and never smaller than that step. */
   load: {
     increasePctUpper: 2.5,
     increasePctLower: 5,
@@ -37,7 +37,8 @@ const TRAINING = {
     plateStepKg: 2.5,
     assistanceStepKg: 2.5,
     maxEffortToQualify: 2.4,     // 2 medium + 1 hard (2.33) still qualifies
-    minIncrementByEquip: {barbell:2.5, dumbbell:1, kettlebell:2, cable:1.25, machine:1.25, smith:2.5, band:1, bodyweight:0, other:2.5}
+    newLoadRepGrace: 2,          // right after a weight increase, this many reps under the range is still "stay"
+    minIncrementByEquip: {barbell:2.5, dumbbell:2.5, kettlebell:4, cable:2.5, machine:2.5, smith:2.5, band:1, bodyweight:2.5, other:2.5}
   },
   lowRepWarningBelow: 7          // reps < 7 (i.e. the ≤6 strength bucket) trigger the warning
 };
@@ -47,7 +48,7 @@ const DAY_ORDER = ['mon','tue','wed','thu','fri','sat','sun'];
 const DAY_LABELS = {sun:'Sunday',mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:'Thursday',fri:'Friday',sat:'Saturday'};
 const EFFORT_LABELS = {easy:'Easy', med:'Medium', hard:'Hard'};
 const EFFORT_SCORE = {easy:1, med:2, hard:3};
-const METRIC_LABELS = { weight_reps:'Weight & reps', reps_only:'Bodyweight reps', time:'Timed hold', assisted:'Assisted (lower is better)' };
+const METRIC_LABELS = { weight_reps:'Weight & reps', weighted_bw:'Bodyweight + added weight', reps_only:'Bodyweight reps', time:'Timed hold', assisted:'Assisted (lower is better)' };
 const HYPE_MESSAGES = ['Nice rep! 💪','Great work!','Getting stronger every session!',"That's the way!",
   'Keep that momentum going!','Solid set!','Locked in 🔒','One step closer to your goal!','That looked strong!','Consistency wins — keep going!'];
 const MOTIVATIONAL_QUOTES = [

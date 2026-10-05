@@ -36,24 +36,87 @@ function backToLanding(){
   renderApp();
 }
 
+/* ------------------------------ Welcome ------------------------------ */
+/* First launch only. Every field is optional; Skip keeps the defaults. */
+function renderWelcome(){
+  const app = document.getElementById('app');
+  document.body.classList.add('welcome-mode');
+  document.getElementById('tabbar').innerHTML = '';
+  let gender = DATA.settings.gender;
+  const chips = (attr, options, current)=> options.map(([value,label])=>
+    `<button type="button" class="chip${value===current?' on':''}" data-${attr}="${value}">${label}</button>`).join('');
+  const node = el(`
+    <div class="welcome">
+      <div class="welcome-brand">${logoMarkHtml()}</div>
+      <h1 class="welcome-title">Welcome to TrackA'<em>gain</em></h1>
+      <p class="welcome-sub">A few optional details to make it yours. Fill in what you like, or skip.</p>
+      <div class="welcome-privacy">${icon('info',16)}<span><b>No account, no sign-up.</b> Everything you enter stays on this phone. Nothing leaves your device.</span></div>
+      <div class="card welcome-card">
+        <div class="field"><label>Your name</label><input id="wName" placeholder="${escapeHtml(DEFAULT_USER_NAME)}" autocomplete="given-name" maxlength="40"></div>
+        <div class="field"><label>Gender</label><div class="welcome-chips">${chips('g', [['male','Male'],['female','Female'],['unspecified','Prefer not to say']], gender)}</div></div>
+        <div class="field"><label>Body weight (kg)</label><input id="wWeight" type="number" step="0.1" min="1" max="400" inputmode="decimal" placeholder="e.g. 77"></div>
+        <div class="field" style="margin:0;"><label>Theme</label><div class="welcome-chips">${chips('t', [['dark',icon('moon',15)+' Dark'],['light',icon('sun',15)+' Light']], currentTheme())}</div></div>
+      </div>
+      <button class="btn hero-cta" data-go>Let's go ${icon('chevronRight',18)}</button>
+      <button class="btn ghost welcome-skip" data-skip>Skip for now</button>
+    </div>`);
+  qa('[data-g]',node).forEach(b=> b.onclick = ()=>{
+    gender = b.dataset.g;
+    qa('[data-g]',node).forEach(x=> x.classList.toggle('on', x===b));
+  });
+  qa('[data-t]',node).forEach(b=> b.onclick = ()=>{
+    setTheme(b.dataset.t);
+    qa('[data-t]',node).forEach(x=> x.classList.toggle('on', x===b));
+  });
+  const finish = (useAnswers)=>{
+    if(useAnswers){
+      const rawWeight = q('#wWeight',node).value.trim();
+      const weight = parseFloat(rawWeight);
+      if(rawWeight && (isNaN(weight) || weight<=0 || weight>400)){ showToast('Enter a weight in kg, or leave it empty'); return; }
+      const name = q('#wName',node).value.trim();
+      if(name) DATA.settings.userName = name;
+      DATA.settings.gender = gender;
+      if(rawWeight) saveBodyWeightEntry(roundTo(weight,1), '', todayKey());
+    }
+    DATA.settings.onboarded = true;
+    saveData(DATA);
+    document.body.classList.remove('welcome-mode');
+    VIEW = 'today';
+    homeScreen = 'landing';
+    window.scrollTo(0,0);
+    renderApp();
+  };
+  q('[data-go]',node).onclick = ()=> finish(true);
+  q('[data-skip]',node).onclick = ()=> finish(false);
+  app.innerHTML = '';
+  app.appendChild(node);
+}
+
 function renderApp(){
+  if(!DATA.settings.onboarded){ renderWelcome(); return; }
+  closeStaleWorkout();
   maybeTrimAwayTime();
   destroyHistoryCharts();
   afterHistoryRender = [];
   const app = document.getElementById('app');
   const dateLabel = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   app.innerHTML = '';
-  const shell = el(`
-    <div class="topbar">
-      <div class="brand">${logoMarkHtml()}<span class="word">TrackA'<em>gain</em></span></div>
-      <div class="topbar-meta">
-        <span class="topbar-date">${escapeHtml(dateLabel)}</span>
-        <span class="streak-pill">${icon('flame',14)} ${currentStreakDays()}</span>
+  const head = el(`
+    <header class="app-head">
+      <div class="topbar">
+        <div class="brand">${logoMarkHtml()}<span class="word">TrackA'<em>gain</em></span></div>
+        <div class="topbar-meta">
+          <span class="topbar-date">${escapeHtml(dateLabel)}</span>
+          <span class="streak-pill">${icon('flame',14)} ${currentStreakDays()}</span>
+        </div>
       </div>
-    </div>`);
-  app.appendChild(shell);
+    </header>`);
+  app.appendChild(head);
   const screen = el(`<div></div>`);
   screen.appendChild((SCREENS[VIEW] || SCREENS.today)());
+  // A screen can mark one element (the workout timer bar) to live in the fixed header.
+  const pinned = q('[data-pin-head]', screen);
+  if(pinned) head.appendChild(pinned);
   app.appendChild(screen);
   const historyPaints = afterHistoryRender;
   afterHistoryRender = [];
@@ -69,10 +132,11 @@ function renderApp(){
   syncWorkoutTimer();
 }
 
-/* Workout clock. elapsedMs is the source of truth; one interval only repaints.
-   Time while the WebView is hidden or suspended is not counted. */
+/* Workout clock. elapsedMs + timerRunningSince is the source of truth; one
+   interval only repaints. The clock is wall time: it keeps running while the
+   phone is locked between sets. Only Finish stops it, and maybeTrimAwayTime
+   takes off long idle gaps. */
 let workoutTicker = null;
-let workoutSeenAt = 0;
 let workoutSaveAt = 0;
 function activeWorkoutLog(){
   return (DATA && DATA.logs && DATA.logs.find(l=>l.active)) || null;
@@ -87,41 +151,27 @@ function freezeWorkoutElapsed(log){
   log.elapsedMs = workoutElapsedMs(log);
   log.timerRunningSince = null;
 }
-function discountSuspendedGap(){
-  const now = Date.now();
-  if(!workoutSeenAt){ workoutSeenAt = now; return; }
-  const gap = now - workoutSeenAt;
-  workoutSeenAt = now;
-  if(gap<=3000) return;
-  const log = activeWorkoutLog();
-  if(!log || !log.timerRunningSince) return;
-  log.timerRunningSince += gap - 1000;
-  if(log.timerRunningSince>now) log.timerRunningSince = now;
-}
 function captureActiveWorkoutElapsed(){
-  discountSuspendedGap();
   const log = activeWorkoutLog();
   if(!log || !log.timerRunningSince) return;
-  if(document.hidden){ freezeWorkoutElapsed(log); return; }
-  log.elapsedMs = workoutElapsedMs(log);
-  log.timerRunningSince = Date.now();
+  const now = Date.now();
+  log.elapsedMs = workoutElapsedMs(log, now);
+  log.timerRunningSince = now;
 }
 function paintWorkoutTimer(){
   const node = document.querySelector('[data-workout-timer]');
   if(!node) return;
   const log = activeWorkoutLog();
   if(!log) return;
-  node.textContent = formatWorkoutClock(workoutElapsedMs(log));
+  paintSlotClock(node, formatWorkoutClock(workoutElapsedMs(log)));
 }
 function tickWorkoutTimer(){
+  if(closeStaleWorkout()){ renderApp(); return; }
   maybeTrimAwayTime();
-  discountSuspendedGap();
   const log = activeWorkoutLog();
   if(!log || document.hidden){
-    if(log) freezeWorkoutElapsed(log);
     clearWorkoutTicker();
     if(log) saveData(DATA);
-    paintWorkoutTimer();
     return;
   }
   if(!log.timerRunningSince) log.timerRunningSince = Date.now();
@@ -133,39 +183,31 @@ function tickWorkoutTimer(){
 }
 function ensureWorkoutTicker(){
   if(workoutTicker) return;
-  workoutSeenAt = Date.now();
   workoutSaveAt = Date.now();
   workoutTicker = setInterval(tickWorkoutTimer, 1000);
 }
 function syncWorkoutTimer(){
   const log = activeWorkoutLog();
-  if(!log || document.hidden){
-    if(log && log.timerRunningSince){
-      discountSuspendedGap();
-      freezeWorkoutElapsed(log);
-      clearWorkoutTicker();
-      saveData(DATA);
-    } else clearWorkoutTicker();
+  if(!log){
+    clearWorkoutTicker();
+    setScreenAwake(false);
     return;
   }
   if(!log.timerRunningSince) log.timerRunningSince = Date.now();
+  if(document.hidden){ clearWorkoutTicker(); return; }
+  setScreenAwake(true);
   ensureWorkoutTicker();
   paintWorkoutTimer();
 }
+/* Hidden or locked: the clock keeps running; only the repaint stops. */
 function pauseWorkoutForBackground(){
-  const log = activeWorkoutLog();
-  if(!log){ clearWorkoutTicker(); return; }
-  discountSuspendedGap();
-  const changed = !!log.timerRunningSince;
-  freezeWorkoutElapsed(log);
   clearWorkoutTicker();
-  if(changed) saveData(DATA);
-  paintWorkoutTimer();
+  if(activeWorkoutLog()) saveData(DATA);
 }
 function stopWorkoutClock(log){
-  discountSuspendedGap();
   freezeWorkoutElapsed(log);
   clearWorkoutTicker();
+  setScreenAwake(false);
 }
 
 const AFK_CLOSE_MS = 3 * 60 * 60 * 1000;
@@ -181,23 +223,46 @@ function markWorkoutActivity(log){
   log.activityElapsedMs = workoutElapsedMs(log);
 }
 /* After 3+ hours with no activity, take the time away off the clock.
-   The workout stays open; it is never closed automatically. */
+   The workout stays open; only closeStaleWorkout finishes one left from an earlier day. */
 function maybeTrimAwayTime(){
   const log = activeWorkoutLog();
   if(!log) return false;
   const now = Date.now();
   const last = log.activityAt || lastWorkoutActivityAt(log);
   if(!last || now - last < AFK_CLOSE_MS) return false;
-  discountSuspendedGap();
   const current = workoutElapsedMs(log, now);
   const atLast = (typeof log.activityElapsedMs==='number' && isFinite(log.activityElapsedMs))
     ? log.activityElapsedMs
     : Math.max(0, current - (now - last));
   log.elapsedMs = Math.max(0, Math.min(current, atLast));
-  log.timerRunningSince = document.hidden ? null : now;
+  log.timerRunningSince = now;
   markWorkoutActivity(log);
   saveData(DATA);
   showToast('Welcome back. Time away was left off the timer');
+  return true;
+}
+/* A workout left open from an earlier day and idle for 3+ hours is finished
+   at its last activity, so today's sets don't land on the old date. */
+function closeStaleWorkout(){
+  const log = activeWorkoutLog();
+  if(!log || log.date===todayKey()) return false;
+  const now = Date.now();
+  const last = log.activityAt || lastWorkoutActivityAt(log);
+  if(last && now - last < AFK_CLOSE_MS) return false;
+  const current = workoutElapsedMs(log, now);
+  const atLast = (typeof log.activityElapsedMs==='number' && isFinite(log.activityElapsedMs))
+    ? log.activityElapsedMs
+    : Math.max(0, current - (now - (last || now)));
+  log.elapsedMs = Math.max(0, Math.min(current, atLast));
+  log.timerRunningSince = null;
+  log.endedAt = last || now;
+  log.active = false;
+  log.completed = log.sets.length>0;
+  if(homeScreen==='workout') homeScreen = 'landing';
+  clearWorkoutTicker();
+  setScreenAwake(false);
+  saveData(DATA);
+  showToast(`Your ${formatLogDate(log.date)} workout was still open, so it was finished`);
   return true;
 }
 
@@ -211,7 +276,7 @@ function startWorkout(){
   log.active = true;
   if(!log.startedAt) log.startedAt = Date.now();
   if(typeof log.elapsedMs!=='number' || !isFinite(log.elapsedMs) || log.elapsedMs<0) log.elapsedMs = 0;
-  log.timerRunningSince = null;
+  log.timerRunningSince = Date.now();
   log.completed = false;
   markWorkoutActivity(log);
   homeScreen = 'workout';
@@ -223,7 +288,7 @@ function reopenWorkout(log){
   absorbQueuedExercises(log);
   log.active = true; log.completed = false; log.endedAt = null;
   if(typeof log.elapsedMs!=='number' || !isFinite(log.elapsedMs) || log.elapsedMs<0) log.elapsedMs = 0;
-  log.timerRunningSince = null;
+  log.timerRunningSince = Date.now();
   markWorkoutActivity(log);
   homeScreen = 'workout';
   VIEW = 'today';
@@ -305,22 +370,32 @@ function renderLanding(){
   }
 
   if(plan.length){
-    const names = plan.map(row=>{
-      const name = (getExercise(row.exerciseId)||{}).name || '?';
-      return setsInLogFor(log,row.exerciseId).length ? `<span class="done-badge">${escapeHtml(name)} ✓</span>` : escapeHtml(name);
-    }).join(', ');
-    const canEditSplit = !Array.isArray(log.plan);
-    const card = el(`
-      <div class="card">
-        <div class="row between">
+    let n = 0;
+    const rowHtml = (row, inSuperset)=>{
+      n++;
+      const ex = getExercise(row.exerciseId);
+      const done = setsInLogFor(log,row.exerciseId).length>0;
+      const range = row.repsMin===row.repsMax ? `${row.repsMin}` : `${row.repsMin}–${row.repsMax}`;
+      const unit = metricOf(ex)==='time' ? 's' : '';
+      return `
+        <div class="hl-row${done?' done':''}">
+          <span class="hl-idx">${done ? icon('check',14) : n}</span>
+          <span class="hl-name">${escapeHtml(ex ? ex.name : '?')}${inSuperset ? `<span class="hl-link" title="Superset" aria-label="Superset">${icon('link',13)}</span>` : ''}</span>
+          <span class="hl-target">${row.sets} × ${range}${unit}</span>
+        </div>`;
+    };
+    const rows = groupPlanRows(plan).map(g=> g.type==='single'
+      ? rowHtml(g.row, false)
+      : g.members.map(m=> rowHtml(m.row, g.members.length>1)).join('')
+    ).join('');
+    wrap.appendChild(el(`
+      <div class="card hl-card">
+        <div class="hl-head">
           <p class="section-title" style="margin:0;">Today's hit list</p>
-          ${canEditSplit ? '<button class="btn ghost" data-edit>Edit day →</button>' : ''}
+          <span class="hl-day">${escapeHtml(planNameForLog(log))} <span class="count-pill">${plan.length}</span></span>
         </div>
-        <p class="small hit-list-names">${names}</p>
-      </div>`);
-    const editBtn = q('[data-edit]',card);
-    if(editBtn) editBtn.onclick = ()=> openDayEditor(weekdayKey());
-    wrap.appendChild(card);
+        <div class="hl-rows">${rows}</div>
+      </div>`));
   }
 
   if(trainedToday){
@@ -333,7 +408,7 @@ function renderLanding(){
         <div class="row between">
           <div>
             <strong>${formatLogDate(last.date)}</strong>
-            <div class="faint small">${last.sets.length} set${last.sets.length>1?'s':''} logged</div>
+            <div class="faint small">${workingSetCount(last.sets)} set${workingSetCount(last.sets)===1?'':'s'} logged</div>
           </div>
           ${last.sets.some(s=>s.isPR) ? '<span class="trophy" style="font-size:20px;">🏆</span>' : ''}
         </div>
@@ -342,48 +417,65 @@ function renderLanding(){
   return wrap;
 }
 
+/* One bar for both clocks, shown in the fixed header. Training: the workout
+   clock. Resting: only the rest countdown, and the bar fills as rest runs;
+   the workout clock keeps counting and comes back when rest ends. */
+function workoutTimerBarEl(log){
+  const restId = WORKOUT_REST_ID;
+  const resting = !!restTimers[restId];
+  const startedAt = log.startedAt ? new Date(log.startedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}) : '';
+  const clock = formatWorkoutClock(workoutElapsedMs(log));
+  const left = resting ? restRemainingText(restId) : '';
+  const center = resting
+    ? `<span class="session-clock slot-clock" data-restcountdown="${restId}" data-shape="${slotShape(left)}" role="timer" aria-label="${left}">${slotClockHtml(left, true)}</span>
+       <span class="tb-sub"><b>Resting</b></span>`
+    : `<span class="session-clock slot-clock" data-workout-timer data-shape="${slotShape(clock)}" role="timer" aria-label="${clock}">${slotClockHtml(clock)}</span>
+       <span class="tb-sub">In progress${startedAt ? ' · '+startedAt : ''}</span>`;
+  const bar = el(`
+    <div class="session-bar timer-bar${resting?' resting':''}" data-pin-head>
+      ${resting ? `<div class="tb-fill-wrap"><div class="tb-fill" data-restfill="${restId}" style="width:${restProgressPct(restId)}%"></div></div>` : ''}
+      <div class="tb-top">
+        <button type="button" class="btn ghost" data-back aria-label="Back to home" style="padding:8px 10px;">${icon('chevronLeft',18)} Back</button>
+        <span class="lbl">${center}</span>
+        <button class="btn" data-finish style="padding:8px 14px;font-size:13px;min-height:44px;">Finish</button>
+      </div>
+    </div>`);
+  q('[data-back]',bar).onclick = backToLanding;
+  q('[data-finish]',bar).onclick = finishWorkout;
+  const lastRow = lastLoggedPlanRow(log);
+  const lastEx = lastRow && getExercise(lastRow.exerciseId);
+  bar.appendChild(restControlsEl(restId, lastRow, lastEx ? lastEx.name : ''));
+  return bar;
+}
+/* Rest start/extend/skip/expiry only change the timer bar. Swapping just the
+   bar keeps focus (and the phone keyboard) in the set inputs. */
+function refreshTimerBar(){
+  const old = document.querySelector('[data-pin-head]');
+  const log = activeWorkoutLog();
+  if(!old || !log || VIEW!=='today' || homeScreen!=='workout') return;
+  old.replaceWith(workoutTimerBarEl(log));
+  paintWorkoutTimer();
+}
+/* The plan row of the exercise logged most recently, so Rest uses its rest time. */
+function lastLoggedPlanRow(log){
+  const last = log.sets[log.sets.length-1];
+  if(!last) return null;
+  return planForLog(log).find(r=>r.exerciseId===last.exerciseId) || null;
+}
+/* Starts the rest after a set (or a superset round) when Settings allows it.
+   A superset rests for the longest rest among its members. */
+function autoStartRest(rows, name){
+  if(!DATA.settings.restAutoStart || !rows.length) return;
+  const seconds = Math.max(...rows.map(r=> restSecondsFor(r)));
+  if(seconds>0) startRestTimer(WORKOUT_REST_ID, seconds, name);
+}
+
 function renderActiveWorkout(){
   const wrap = el(`<div></div>`);
   const log = todayLog();
   const plan = ensurePlanSnapshot(log);
 
-  const thisWeek = weeklyVolumeLoad(0), lastWeek = weeklyVolumeLoad(1);
-  const change = lastWeek>0 ? Math.round((thisWeek-lastWeek)/lastWeek*100) : (thisWeek>0?100:0);
-  const changeText = (!lastWeek && !thisWeek) ? 'Log a set to start tracking growth'
-    : (change>=0 ? `▲ ${change}% volume vs prior 7 days` : `▼ ${Math.abs(change)}% volume vs prior 7 days`);
-  const prCount = log.sets.filter(s=>s.isPR).length;
-  const startedAt = log.startedAt ? new Date(log.startedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}) : '';
-  const clock = formatWorkoutClock(workoutElapsedMs(log));
-
-  const bar = el(`
-    <div class="session-bar">
-      <button type="button" class="btn ghost" data-back aria-label="Back to home" style="padding:8px 10px;">${icon('chevronLeft',18)} Back</button>
-      <span class="lbl">
-        <span class="session-clock" data-workout-timer>${clock}</span>
-        <span style="display:block;font-size:11px;font-weight:600;color:var(--text-dim);">In progress${startedAt ? ' · '+startedAt : ''}</span>
-      </span>
-      <button class="btn" data-finish style="padding:8px 14px;font-size:13px;min-height:44px;">Finish</button>
-    </div>`);
-  q('[data-back]',bar).onclick = backToLanding;
-  q('[data-finish]',bar).onclick = finishWorkout;
-  wrap.appendChild(bar);
-
-  const restWrap = el(`<div class="workout-rest"></div>`);
-  restWrap.appendChild(restTimers[WORKOUT_REST_ID]
-    ? restCardEl(WORKOUT_REST_ID)
-    : restStartRowEl({exerciseId:WORKOUT_REST_ID}, ''));
-  wrap.appendChild(restWrap);
-
-  wrap.appendChild(el(`
-    <div class="card">
-      <p class="faint small">Current split · ${escapeHtml(activeSplit().label)} · ${escapeHtml(planNameForLog(log))} day</p>
-      <div style="margin-top:10px;">${statGridHtml([
-        {value:log.sets.length, label:'Sets today'},
-        {value:roundTo(totalEffectiveSets(log.sets)), label:'Effective sets'},
-        {value:prCount ? '🏆 '+prCount : Math.round(thisWeek), label:prCount ? 'PRs today' : 'Week volume'}
-      ])}</div>
-      <p class="faint small" style="margin-top:10px;">${changeText}</p>
-    </div>`));
+  wrap.appendChild(workoutTimerBarEl(log));
 
   if(!plan.length){
     wrap.appendChild(el(`
@@ -391,7 +483,7 @@ function renderActiveWorkout(){
         <p class="muted">Scheduled rest day. Recovery is part of the plan — but you can still train if you want to.</p>
       </div>`));
   } else {
-    wrap.appendChild(el(`<div class="section-title">Today's plan</div>`));
+    wrap.appendChild(el(`<div class="section-title">Workout starts here</div>`));
     groupPlanRows(plan).forEach(g=>{
       if(g.type==='superset' && g.members.length>=2){
         const roundsDone = Math.min(...g.members.map(m=>workingSetsInLogFor(log, m.row.exerciseId).length));
@@ -437,7 +529,7 @@ function renderActiveWorkout(){
 
   const addBox = el(`
     <div class="card flat" style="text-align:center;">
-      <button class="btn secondary" data-add style="width:100%;">＋ Add exercise</button>
+      <button class="btn dashed" data-add style="width:100%;">${icon('plus',16)} Add exercise</button>
       <p class="faint small" style="margin-top:8px;">Adds it to this workout. You can keep it on your split, or just for today.</p>
     </div>`);
   q('[data-add]',addBox).onclick = ()=> openExercisePicker({
@@ -474,6 +566,7 @@ function openSupersetPickerSheet(plan){
           if(!canCreate) return;
           const groupId = uid();
           plan.forEach((row,idx)=>{ if(picked.has(idx)) row.supersetId = groupId; });
+          dissolveTinySupersets(plan);
           saveData(DATA);
           sheet.close();
           showToast('Superset created 🔗');
@@ -605,9 +698,12 @@ function workoutExerciseCard(planRow, index, log, opts){
     </div>` : '';
 
   const wStep = metric==='assisted' ? TRAINING.load.assistanceStepKg : loadStepFor(ex);
+  const weightUnit = metric==='assisted' ? 'kg assist' : metric==='weighted_bw' ? 'kg added'
+    : equipOf(ex)==='dumbbell' ? `${units()} each` : units();
+  const weightName = metric==='assisted' ? 'assistance' : metric==='weighted_bw' ? 'added weight' : 'weight';
   const steppers = metric==='time' ? stepperHtml('duration', draft.duration, 'sec', 'seconds')
     : metric==='reps_only' ? stepperHtml('reps', draft.reps, 'reps', 'reps')
-    : stepperHtml('weight', draft.weight, metric==='assisted'?'kg assist':units(), metric==='assisted'?'assistance':'weight')
+    : stepperHtml('weight', draft.weight, weightUnit, weightName)
       + stepperHtml('reps', draft.reps, 'reps', 'reps');
   const showWarmup = !(editSet && editSet.isDropSet);
   const nextSet = `
@@ -660,19 +756,24 @@ function workoutExerciseCard(planRow, index, log, opts){
       </div>
     </div>`);
 
-  const lastWorkSet = (metric==='weight_reps' || metric==='assisted')
-    ? doneSets.filter(s=>!s.isDropSet && !s.isWarmup).slice(-1)[0] : null;
-  const liveLower = lastWorkSet && (lastWorkSet.reps||0) > 0 && lastWorkSet.reps < planRow.repsMin;
+  const lastWorkSet = hasLoadField(metric)
+    ? doneSets.filter(s=>!s.isDropSet && !s.isWarmup && !(metric==='weighted_bw' && !(s.weight>0))).slice(-1)[0] : null;
+  // A fresh weight increase (heavier than last session; lighter assist) gets a few reps of grace.
+  const prevRef = status.referenceWeight;
+  const heavierThanLast = !!lastWorkSet && prevRef!=null && (metric==='assisted'
+    ? (lastWorkSet.weight||0) < prevRef-0.01 : (lastWorkSet.weight||0) > prevRef+0.01);
+  const grace = heavierThanLast ? TRAINING.load.newLoadRepGrace : 0;
+  const liveLower = lastWorkSet && (lastWorkSet.reps||0) > 0 && lastWorkSet.reps < planRow.repsMin - grace;
   if(collapsed){
     q('[data-expand]',card).onclick = ()=>{ expandedCards.add(listKey); renderApp(); };
   } else if(liveLower){
     const weight = lowerLoadFor(ex, lastWorkSet.weight||0, lastWorkSet.reps, planRow.repsMin, metric==='assisted');
     const applied = draft.weight === weight;
     q('[data-progression]',card).appendChild(lowerAdviceBox({
-      exerciseId: planRow.exerciseId, weight, applied,
-      headline: applied ? `Next set at ${weight}${units()}${metric==='assisted'?' assist':''}`
+      exerciseId: planRow.exerciseId, weight, applied, metric,
+      headline: applied ? `Next set at ${loadLabel(weight, metric)}`
         : metric==='assisted' ? `Add assistance: ${weight}${units()} for the next set`
-        : `Drop to ${weight}${units()} for the next set`,
+        : `Drop to ${loadLabel(weight, metric)} for the next set`,
       note: `Last set ${setValueText(lastWorkSet, metric)} is below your ${planRow.repsMin}–${planRow.repsMax} range.`,
     }));
   } else {
@@ -767,6 +868,13 @@ function workoutExerciseCard(planRow, index, log, opts){
     expandedCards.clear();
     celebrateSet(set);
     renderApp();
+    // Inside a superset only the last member rests; the others go straight to the next exercise.
+    const groupIds = opts.groupIds;
+    if(!groupIds) autoStartRest([planRow], ex.name);
+    else if(groupIds[groupIds.length-1]===planRow.exerciseId){
+      const rows = planForLog(log).filter(r=> groupIds.includes(r.exerciseId));
+      autoStartRest(rows, ex.name);
+    }
   };
   const removeBtn = q('[data-remove]',card);
   if(removeBtn) removeBtn.onclick = ()=> removeExerciseFromActiveWorkout(log, planRow.exerciseId);
@@ -793,19 +901,20 @@ function overloadProgressHtml(status){
 
 /* "Too heavy" advice: reps fell below the range, so suggest a lighter load the
    steppers can jump to. `status` is only passed for the next-session version. */
-function lowerAdviceBox({exerciseId, weight, applied, headline, note, status}){
+function lowerAdviceBox({exerciseId, weight, applied, headline, note, status, metric}){
+  const label = escapeHtml(loadLabel(weight, metric || (status && status.metric)));
   const box = el(`
     <div class="suggest-box lower-box">
       ${guideInfoBtnHtml()}
       <div class="sb-line">${escapeHtml(headline)}</div>
       <div class="lb-note">${escapeHtml(note)}</div>
-      ${applied ? '' : `<button type="button" class="btn lb-use" data-use>Use ${weight}${units()}</button>`}
+      ${applied ? '' : `<button type="button" class="btn lb-use" data-use>Use ${label}</button>`}
       ${overloadProgressHtml(status)}
     </div>`);
   const use = q('[data-use]',box);
   if(use) use.onclick = ()=>{
     setLoadPlan(exerciseId, {weight, deferred:false});
-    showToast(`Steppers set to ${weight}${units()}`);
+    showToast(`Steppers set to ${loadLabel(weight, metric || (status && status.metric))}`);
     renderApp();
   };
   bindGuideInfo(box, 'lower');
@@ -827,14 +936,14 @@ function progressionBlock(status, planRow){
         <div class="ph">🎯 ${escapeHtml(status.headline)}</div>
         ${status.note?`<div class="pn">${escapeHtml(status.note)}</div>`:''}
         <div class="row">
-          <button class="btn" data-accept>Use ${status.suggestedWeight}${units()}</button>
+          <button class="btn" data-accept>Use ${escapeHtml(loadLabel(status.suggestedWeight, status.metric))}</button>
           <button class="btn secondary" data-defer>Not today</button>
           <button class="btn secondary" data-adjust>Adjust</button>
         </div>
       </div>`);
     q('[data-accept]',prompt).onclick = ()=>{
       setLoadPlan(status.exerciseId, {weight:status.suggestedWeight, deferred:false});
-      showToast(`Locked in — ${status.suggestedWeight}${units()} today 💪`);
+      showToast(`Locked in — ${loadLabel(status.suggestedWeight, status.metric)} today 💪`);
       renderApp();
     };
     q('[data-defer]',prompt).onclick = ()=>{
@@ -885,10 +994,12 @@ function logSupersetRound(members, log){
   if(logged.some(s=>s.isPR)) showToast('🏆 New personal record! You crushed it!', true);
   else showToast('Round logged');
   renderApp();
+  const names = members.map(m=> (getExercise(m.row.exerciseId)||{}).name).filter(Boolean);
+  autoStartRest(members.map(m=>m.row), names.join(' + '));
 }
 
 function openCelebrationSheet(log){
-  const totalSets = log.sets.length;
+  const totalSets = workingSetCount(log.sets);
   const volume = Math.round(log.sets.reduce((sum,s)=>sum+setVolumeLoad(s),0));
   const prCount = log.sets.filter(s=>s.isPR).length;
   const topMuscles = muscleWorkForSets(log.sets).slice(0,3).map(r=>`${r.muscle} ${roundTo(r.effectiveSets)}`).join(' · ');
@@ -920,13 +1031,17 @@ function openCelebrationSheet(log){
 }
 
 function openShareSummarySheet(log){
-  const totalSets = log.sets.length;
+  const totalSets = workingSetCount(log.sets);
   const volume = Math.round(log.sets.reduce((sum,s)=>sum+setVolumeLoad(s),0));
   const prCount = log.sets.filter(s=>s.isPR).length;
   const dur = sessionDurationMs(log);
   const minutes = dur==null ? null : Math.max(1, Math.round(dur/60000));
   const dateNice = parseDateKey(log.date).toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'});
   const names = [...new Set(log.sets.map(s=>(getExercise(s.exerciseId)||{}).name).filter(Boolean))];
+  const thisWeek = weeklyVolumeLoad(0), lastWeek = weeklyVolumeLoad(1);
+  const change = lastWeek>0 ? Math.round((thisWeek-lastWeek)/lastWeek*100) : (thisWeek>0?100:0);
+  const changeText = (!lastWeek && !thisWeek) ? ''
+    : (change>=0 ? `▲ ${change}% volume vs prior 7 days` : `▼ ${Math.abs(change)}% volume vs prior 7 days`);
   openSheet({
     title:'Workout summary',
     onClosed: renderApp,
@@ -938,10 +1053,13 @@ function openShareSummarySheet(log){
           <div class="share-date">${escapeHtml(dateNice)} · ${escapeHtml(planNameForLog(log))} day</div>
           <div class="share-stats">
             <div><div class="val">${totalSets}</div><div class="lbl">Sets</div></div>
+            <div><div class="val">${roundTo(totalEffectiveSets(log.sets))}</div><div class="lbl">Effective sets</div></div>
             <div><div class="val">${volume}</div><div class="lbl">Volume (${units()})</div></div>
             <div><div class="val">${minutes!==null?minutes:'—'}</div><div class="lbl">Minutes</div></div>
             <div><div class="val">${prCount}</div><div class="lbl">PRs</div></div>
+            <div><div class="val">${names.length}</div><div class="lbl">Exercises</div></div>
           </div>
+          ${changeText ? `<div class="share-streak" style="margin-bottom:14px;">${changeText}</div>` : ''}
           ${names.length ? `<div class="share-exlist">${names.map(escapeHtml).join('<br>')}</div>` : ''}
           <div class="share-quote">${escapeHtml(appreciationLine(totalSets, prCount))}</div>
           <div class="share-streak">🔥 ${currentStreakDays()} day streak</div>

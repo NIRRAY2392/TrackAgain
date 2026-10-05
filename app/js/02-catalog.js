@@ -55,7 +55,7 @@ const CATALOG_RAW = [
   ['Decline Press','Chest',['Triceps'],'horizontal_push','barbell','compound','weight_reps',62],
   ['Machine Chest Press','Chest',['Triceps','Shoulders'],'horizontal_push','machine','compound','weight_reps',70],
   ['Smith Machine Bench Press','Chest',['Triceps','Shoulders'],'horizontal_push','smith','compound','weight_reps',54],
-  ['Chest Dip','Chest',['Triceps','Shoulders'],'vertical_push','bodyweight','compound','reps_only',66],
+  ['Chest Dip','Chest',['Triceps','Shoulders'],'vertical_push','bodyweight','compound','weighted_bw',66],
   ['Push-up','Chest',['Triceps','Shoulders','Abs'],'horizontal_push','bodyweight','compound','reps_only',86],
   ['Chest Fly','Chest',['Shoulders'],'chest_fly','dumbbell','isolation','weight_reps',74],
   ['Cable Crossover','Chest',['Shoulders'],'chest_fly','cable','isolation','weight_reps',72],
@@ -73,7 +73,7 @@ const CATALOG_RAW = [
   ['Upright Row','Shoulders',['Upper Back','Biceps'],'lateral_raise','barbell','compound','weight_reps',48],
   /* Triceps */
   ['Close-Grip Bench Press','Triceps',['Chest','Shoulders'],'horizontal_push','barbell','compound','weight_reps',74],
-  ['Dips','Triceps',['Chest','Shoulders'],'vertical_push','bodyweight','compound','reps_only',80],
+  ['Dips','Triceps',['Chest','Shoulders'],'vertical_push','bodyweight','compound','weighted_bw',80],
   ['Triceps Pushdown','Triceps',[],'elbow_extension','cable','isolation','weight_reps',92],
   ['Rope Pushdown','Triceps',[],'elbow_extension','cable','isolation','weight_reps',80],
   ['Overhead Triceps Extension','Triceps',[],'elbow_extension','cable','isolation','weight_reps',78],
@@ -82,8 +82,8 @@ const CATALOG_RAW = [
   ['Triceps Kickback','Triceps',[],'elbow_extension','dumbbell','isolation','weight_reps',46],
   ['Bench Dip','Triceps',['Chest'],'vertical_push','bodyweight','isolation','reps_only',44],
   /* Lats */
-  ['Pull-up','Lats',['Biceps','Upper Back'],'vertical_pull','bodyweight','compound','reps_only',95],
-  ['Chin-up','Lats',['Biceps'],'vertical_pull','bodyweight','compound','reps_only',82],
+  ['Pull-up','Lats',['Biceps','Upper Back'],'vertical_pull','bodyweight','compound','weighted_bw',95],
+  ['Chin-up','Lats',['Biceps'],'vertical_pull','bodyweight','compound','weighted_bw',82],
   ['Assisted Pull-up','Lats',['Biceps','Upper Back'],'vertical_pull','machine','compound','assisted',70],
   ['Lat Pulldown','Lats',['Biceps','Upper Back'],'vertical_pull','cable','compound','weight_reps',93],
   ['Close-Grip Lat Pulldown','Lats',['Biceps'],'vertical_pull','cable','compound','weight_reps',72],
@@ -157,7 +157,7 @@ const CATALOG_RAW = [
   ['Cable Crunch','Abs',[],'crunch','cable','isolation','weight_reps',70],
   ['Hanging Knee Raise','Abs',[],'crunch','bodyweight','isolation','reps_only',62],
   ['Ab Wheel Rollout','Abs',['Lats'],'anti_extension','other','isolation','reps_only',60],
-  ['Russian Twist','Abs',[],'rotation','bodyweight','isolation','reps_only',58],
+  ['Russian Twist','Abs',[],'rotation','bodyweight','isolation','weighted_bw',58],
   ['Side Plank','Abs',[],'anti_extension','bodyweight','isolation','time',56],
   ['Cable Woodchop','Abs',[],'rotation','cable','isolation','weight_reps',44],
   ['Mountain Climber','Abs',['Quads'],'crunch','bodyweight','isolation','reps_only',40],
@@ -168,4 +168,6 @@ const CATALOG_RAW = [
 ];
 const CATALOG = CATALOG_RAW.map(r=>({name:r[0],primary:r[1],secondary:r[2],pattern:r[3],equipment:r[4],tier:r[5],metric:r[6],popularity:r[7]}));
 const CATALOG_BY_NAME = {}; CATALOG.forEach(c=>{ CATALOG_BY_NAME[c.name.toLowerCase()] = c; });
+/* Catalog moves that used to be plain bodyweight reps (migrate converts old saves once). */
+const WEIGHTED_BW_MOVES = new Set(CATALOG.filter(c=>c.metric==='weighted_bw').map(c=>c.name.toLowerCase()));
 

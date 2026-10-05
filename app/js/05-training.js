@@ -3,20 +3,34 @@
    here. No DOM access in this section. */
 
 /* --- raw set maths --- */
+/* Epley. A single is the max itself; reps are capped at 30 so high-rep sets
+   (hypertrophy / endurance) still rank above fewer reps at the same weight. */
 function estimateOneRepMax(weight, reps){
-  const r = Math.min(Math.max(reps||0, 0), 10);
-  return (weight||0) * (1 + r/30);
+  const w = weight||0, r = Math.min(Math.max(reps||0, 0), 30);
+  return r<=1 ? w : w * (1 + r/30);
+}
+/* Metrics whose sets carry a weight field (load, assistance or added load). */
+function hasLoadField(metric){ return metric==='weight_reps' || metric==='assisted' || metric==='weighted_bw'; }
+/* weighted_bw stores only the added load; scoring and volume add the lifter.
+   Uses the latest weigh-in, or a typical adult weight when none is logged. */
+const DEFAULT_BODYWEIGHT_KG = 75;
+function bodyweightForScoring(){
+  const latest = latestBodyWeight();
+  return latest && latest.weight > 0 ? latest.weight : DEFAULT_BODYWEIGHT_KG;
 }
 function setVolumeLoad(set){
-  if(set.isDropSet){
-    return (set.stages||[]).reduce((sum,st)=> sum + ((typeof st.weight==='number' && typeof st.reps==='number') ? st.weight*st.reps : 0), 0);
-  }
-  return (typeof set.weight==='number' && typeof set.reps==='number') ? set.weight*set.reps : 0;
+  if(set.isWarmup) return 0;
+  const ex = getExercise(set.exerciseId);
+  const extra = metricOf(ex)==='weighted_bw' ? bodyweightForScoring() : 0;
+  const one = s=> (typeof s.weight==='number' && typeof s.reps==='number') ? (s.weight+extra)*s.reps : 0;
+  if(set.isDropSet) return (set.stages||[]).reduce((sum,st)=> sum + one(st), 0);
+  return one(set);
 }
 function betterIsHigher(metric){ return metric!=='assisted'; }
 /* One comparable number per set, used for PRs and charts. */
 function setPerformanceScore(set, metric){
   if(metric==='weight_reps') return estimateOneRepMax(set.weight, set.reps);
+  if(metric==='weighted_bw') return estimateOneRepMax(bodyweightForScoring() + (set.weight||0), set.reps);
   if(metric==='reps_only')   return set.reps||0;
   if(metric==='time')        return set.duration||0;
   if(metric==='assisted')    return (set.weight||0) / (1 + (set.reps||0)/30); // less assistance = better
@@ -33,7 +47,7 @@ function repRangeFor(reps){
 function isLowRepSet(set, metric){
   // Warm-ups are exempt: fewer than the working-set floor is normal while ramping up.
   if(!set || set.isWarmup) return false;
-  return (metric==='weight_reps' || metric==='assisted') && (set.reps||0) > 0 && set.reps < TRAINING.lowRepWarningBelow;
+  return hasLoadField(metric) && (set.reps||0) > 0 && set.reps < TRAINING.lowRepWarningBelow;
 }
 function effectiveSetsFor(set, exercise){
   if(set.isWarmup) return 0;
@@ -77,20 +91,34 @@ function sessionEffortSummary(sets){
   return {avg, mostlyEasy, mostlyHard, label: mostlyEasy?'mostly easy':(mostlyHard?'mostly hard':'medium effort')};
 }
 
-/* --- personal records --- */
+/* --- personal records ---
+   The first set ever logged is the baseline, not a PR: only beating it earns
+   the trophy. Warm-ups and drop sets never hold one. */
 function recomputePRs(exerciseId){
   const ex = getExercise(exerciseId); if(!ex) return;
   const metric = metricOf(ex), higher = betterIsHigher(metric);
   const refs = [];
-  DATA.logs.forEach(log=> log.sets.forEach(set=>{ if(set.exerciseId===exerciseId && !set.isDropSet && !set.isWarmup) refs.push({log,set}); }));
-  refs.sort((a,b)=> a.log.date===b.log.date ? (a.set.ts-b.set.ts) : a.log.date.localeCompare(b.log.date));
+  DATA.logs.forEach(log=> log.sets.forEach(set=>{
+    if(set.exerciseId!==exerciseId) return;
+    if(set.isDropSet || set.isWarmup){ set.isPR = false; return; }
+    refs.push({log,set});
+  }));
+  refs.sort((a,b)=> a.log.date===b.log.date ? ((a.set.ts||0)-(b.set.ts||0)) : a.log.date.localeCompare(b.log.date));
   let best = null;
   refs.forEach(({set})=>{
     const score = setPerformanceScore(set, metric);
     const improved = best===null || (higher ? score>best : score<best);
-    set.isPR = improved;
+    set.isPR = improved && best!==null;
     if(improved) best = score;
   });
+}
+/* Re-ranks every exercise once when the PR rules change. */
+const PR_RULES_VERSION = 2;
+function upgradePrFlags(){
+  if((DATA.settings.prRulesVersion||0) >= PR_RULES_VERSION) return;
+  new Set(DATA.logs.flatMap(l=> l.sets.map(s=>s.exerciseId))).forEach(id=> recomputePRs(id));
+  DATA.settings.prRulesVersion = PR_RULES_VERSION;
+  saveData(DATA);
 }
 /* Chronological PR moments (including the first logged set as the first PR).
    Same scoring as recomputePRs; drop sets excluded. Oldest first. */
@@ -137,21 +165,20 @@ function roundToPlate(weight){
   const step = TRAINING.load.plateStepKg;
   return Math.round(weight/step)*step;
 }
-/* Smallest weight change the equipment allows (dumbbell 1, cable 1.25...). */
+/* Smallest load change for this exercise: its own "weight jump" if set,
+   otherwise the equipment default. Increases always move at least this much. */
 function loadStepFor(exercise){
+  if(exercise && exercise.loadStep > 0) return exercise.loadStep;
   const step = (TRAINING.load.minIncrementByEquip||{})[equipOf(exercise)];
   return step > 0 ? step : TRAINING.load.plateStepKg;
 }
 function nextLoadFor(exercise, currentWeight){
   const pct = LOWER_BODY_MUSCLES.has(primaryOf(exercise)) ? TRAINING.load.increasePctLower : TRAINING.load.increasePctUpper;
-  const byEquip = TRAINING.load.minIncrementByEquip || {};
-  const minInc = byEquip[equipOf(exercise)] != null ? byEquip[equipOf(exercise)] : TRAINING.load.minIncrementKg;
-  if(minInc<=0) return currentWeight;
   const step = loadStepFor(exercise);
-  const bump = Math.max(minInc, currentWeight * pct/100);
+  const bump = Math.max(step, currentWeight * pct/100);
   const next = roundTo(Math.round((currentWeight + bump)/step)*step, 2);
-  if(next >= currentWeight + minInc - 1e-9) return next;
-  return roundTo(Math.ceil((currentWeight + minInc)/step - 1e-9)*step, 2);
+  if(next >= currentWeight + step - 1e-9) return next;
+  return roundTo(Math.ceil((currentWeight + step)/step - 1e-9)*step, 2);
 }
 /* The load to move to after reps fell below the range. Uses the same
    one-rep-max estimate as PRs to aim for the bottom of the range, rounds down
@@ -163,7 +190,8 @@ function lowerLoadFor(exercise, weight, reps, targetReps, assisted){
     return roundTo(weight + step*Math.max(1, Math.ceil((targetReps-reps)/2)), 2);
   }
   const step = loadStepFor(exercise);
-  const ideal = weight * (1 + reps/30) / (1 + targetReps/30);
+  const bw = metricOf(exercise)==='weighted_bw' ? bodyweightForScoring() : 0;
+  const ideal = (weight + bw) * (1 + reps/30) / (1 + targetReps/30) - bw;
   const down = Math.floor(ideal/step + 1e-9) * step;
   return Math.max(0, roundTo(Math.min(down, weight - step), 2));
 }
@@ -189,7 +217,8 @@ const FIRST_SESSION_COPY = {
   weight_reps:'No history yet — pick a weight you can control for the full rep range, then log it.',
   reps_only:'No history yet — do as many clean reps as you can, then log it.',
   time:'No history yet — hold as long as you can with good form, then log it.',
-  assisted:'No history yet — pick an assistance level that lets you complete the reps, then log it.'
+  assisted:'No history yet — pick an assistance level that lets you complete the reps, then log it.',
+  weighted_bw:'No history yet — do clean reps at bodyweight (add weight only if it is easy), then log it.'
 };
 
 /* Returns everything the UI needs to describe "what should I do today?".
@@ -260,26 +289,37 @@ function progressionFor(exerciseId, planRow){
         : nextLoadFor(ex, referenceWeight);
       status.headline = assisted
         ? `Ready to drop assistance: ${referenceWeight} → ${status.suggestedWeight}${units()}`
-        : `Ready to add load: ${referenceWeight} → ${status.suggestedWeight}${units()}`;
-      status.note = `${qualifying} clean session${qualifying>1?'s':''} at ${referenceWeight}${units()} × ${repsTarget}+ reps.`;
+        : `Ready to add load: ${loadLabel(referenceWeight, metric)} → ${loadLabel(status.suggestedWeight, metric)}`;
+      status.note = `${qualifying} clean session${qualifying>1?'s':''} at ${loadLabel(referenceWeight, metric)} × ${repsTarget}+ reps.`;
     }
   } else {
     const bestReps = Math.max(...lastNormal.map(s=>s.reps||0));
     const atRef = lastNormal.filter(s=> Math.abs((s.weight||0) - referenceWeight) < 0.01);
     const bestAtRef = Math.max(...atRef.map(s=>s.reps||0));
     status.progressText = `Overload progress: ${qualifying}/${goal.sessionsRequired} qualifying sessions`;
-    if(bestAtRef > 0 && bestAtRef < repsMin){
+    /* Reps falling a little after a weight increase is expected: hold the new
+       weight instead of bouncing straight back down. */
+    const prevNormal = sessions[1] ? sessions[1].sets.filter(s=>!s.isDropSet && !s.isWarmup) : [];
+    const prevRef = prevNormal.length ? mostCommonWeight(prevNormal, assisted) : null;
+    const justIncreased = prevRef!=null && (assisted ? referenceWeight < prevRef-0.01 : referenceWeight > prevRef+0.01);
+    const grace = justIncreased ? TRAINING.load.newLoadRepGrace : 0;
+    if(justIncreased && bestAtRef > 0 && bestAtRef < repsMin && bestAtRef >= repsMin - grace){
+      status.headline = `Stay at ${loadLabel(referenceWeight, metric)} for ${repsMin}–${repsMax} reps`;
+      status.note = `New weight — build back up to ${repsMin}+ reps before changing it.`;
+      return applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, repsMin, repsMax);
+    }
+    // At plain bodyweight there is nothing to take off: build reps instead.
+    const canLower = !(metric==='weighted_bw' && referenceWeight<=0);
+    if(canLower && bestAtRef > 0 && bestAtRef < repsMin){
       status.state = 'lower';
       status.lowerWeight = lowerLoadFor(ex, referenceWeight, bestAtRef, repsMin, assisted);
       status.headline = assisted
         ? `Add assistance: ${status.lowerWeight}${units()} assist for ${repsMin}–${repsMax} reps`
-        : `Drop to ${status.lowerWeight}${units()} for ${repsMin}–${repsMax} reps`;
-      status.note = `Last time: ${referenceWeight}${units()}${assisted?' assist':''} for ${bestAtRef} reps, below your ${repsMin}–${repsMax} range. For ${goal.label}, pick a weight you can do at least ${repsMin} times.`;
+        : `Drop to ${loadLabel(status.lowerWeight, metric)} for ${repsMin}–${repsMax} reps`;
+      status.note = `Last time: ${loadLabel(referenceWeight, metric)} for ${bestAtRef} reps, below your ${repsMin}–${repsMax} range. For ${goal.label}, pick a weight you can do at least ${repsMin} times.`;
       return applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, repsMin, repsMax);
     }
-    status.headline = assisted
-      ? `Stay at ${referenceWeight}${units()} assist for ${repsMin}–${repsMax} reps`
-      : `Stay at ${referenceWeight}${units()} for ${repsMin}–${repsMax} reps`;
+    status.headline = `Stay at ${loadLabel(referenceWeight, metric)} for ${repsMin}–${repsMax} reps`;
     status.note = effort.mostlyHard ? 'That one felt hard — hold the load and chase one more rep.'
       : bestReps < repsTarget ? `Add reps first — ${setsNeeded} sets at ${repsTarget}+ reps unlocks more weight.`
       : (qualifying+1 >= goal.sessionsRequired)
@@ -295,11 +335,11 @@ function applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, re
   if(plan && typeof plan.weight === 'number'){
     status.state = 'accepted';
     status.targetWeight = plan.weight;
-    status.headline = `Today's target: ${plan.weight}${units()}${assisted?' assist':''} × ${repsMin}–${repsMax} reps`;
+    status.headline = `Today's target: ${loadLabel(plan.weight, status.metric)} × ${repsMin}–${repsMax} reps`;
     status.note = null;
   } else if(plan && plan.deferred){
     status.state = 'deferred';
-    status.headline = `Holding ${referenceWeight}${units()}${assisted?' assist':''} today — we'll ask again next session.`;
+    status.headline = `Holding ${loadLabel(referenceWeight, status.metric)} today — we'll ask again next session.`;
     status.note = null;
   }
   return status;
@@ -358,7 +398,7 @@ function currentStreakDays(){
     const log = DATA.logs.find(l=>l.date===dateKey(cursor));
     const trained = !!(log && log.sets.length);
     if(i===0 && !trained){ cursor.setDate(cursor.getDate()-1); continue; } // today doesn't break it yet
-    if(isRestDay || trained){ if(trained && !isRestDay) streak++; cursor.setDate(cursor.getDate()-1); continue; }
+    if(isRestDay || trained){ if(trained) streak++; cursor.setDate(cursor.getDate()-1); continue; }
     break;
   }
   return streak;

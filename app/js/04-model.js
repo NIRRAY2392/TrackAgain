@@ -232,6 +232,7 @@ function queueExerciseForToday(exerciseId){
 }
 function setsInLogFor(log, exerciseId){ return log.sets.filter(s=>s.exerciseId===exerciseId); }
 function workingSetsInLogFor(log, exerciseId){ return log.sets.filter(s=>s.exerciseId===exerciseId && !s.isWarmup); }
+function workingSetCount(sets){ return (sets||[]).filter(s=>!s.isWarmup).length; }
 
 /* Groups plan rows for display. Rows sharing a supersetId are gathered into
    one visual group (in the order they first appear); everything else is

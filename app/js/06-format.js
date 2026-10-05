@@ -1,7 +1,14 @@
 /* ============================ §6 FORMAT ============================ */
+/* One load in words: "60kg", "12.5kg assist", "BW + 10kg", "bodyweight". */
+function loadLabel(weight, metric){
+  if(metric==='assisted') return `${weight}${units()} assist`;
+  if(metric==='weighted_bw') return weight>0 ? `BW + ${weight}${units()}` : 'bodyweight';
+  return `${weight}${units()}`;
+}
 function setValueText(set, metric){
   if(set.isDropSet) return dropSetSummaryText(set, metric);
   if(metric==='weight_reps') return `${set.weight}${units()} × ${set.reps}`;
+  if(metric==='weighted_bw') return (set.weight>0 ? `BW+${set.weight}${units()}` : 'BW')+` × ${set.reps}`;
   if(metric==='reps_only')   return `${set.reps} reps`;
   if(metric==='time')        return `${set.duration}s`;
   if(metric==='assisted')    return `${set.weight}${units()} assist × ${set.reps}`;
@@ -9,6 +16,7 @@ function setValueText(set, metric){
 }
 function formatPrValue(set, metric){
   if(metric==='weight_reps') return `${set.weight} kg × ${set.reps}`;
+  if(metric==='weighted_bw') return set.weight>0 ? `BW + ${set.weight} kg × ${set.reps}` : `${set.reps} reps`;
   if(metric==='reps_only')   return `${set.reps} reps`;
   if(metric==='time')        return `${set.duration} s`;
   if(metric==='assisted')    return `${set.weight} kg`;
@@ -19,6 +27,7 @@ function formatPrMomentLine(moment, metric){
 }
 function stageValueText(stage, metric){
   if(metric==='weight_reps') return `${stage.weight}${units()}×${stage.reps}`;
+  if(metric==='weighted_bw') return (stage.weight>0 ? `BW+${stage.weight}${units()}` : 'BW')+`×${stage.reps}`;
   if(metric==='reps_only')   return `${stage.reps} reps`;
   if(metric==='time')        return `${stage.duration}s`;
   if(metric==='assisted')    return `${stage.weight}${units()} assist×${stage.reps}`;
@@ -29,7 +38,7 @@ function dropSetSummaryText(set, metric){
 }
 function defaultDropStages(metric, prefillWeight){
   const base = ()=>{
-    if(metric==='weight_reps' || metric==='assisted') return {weight: prefillWeight!=null?prefillWeight:'', reps:''};
+    if(hasLoadField(metric)) return {weight: prefillWeight!=null?prefillWeight:'', reps:''};
     if(metric==='reps_only') return {reps:''};
     if(metric==='time') return {duration:''};
     return {};
@@ -37,8 +46,8 @@ function defaultDropStages(metric, prefillWeight){
   return [base(), base()];
 }
 function stageFieldsHtml(metric, stage, idx){
-  if(metric==='weight_reps' || metric==='assisted'){
-    const label = metric==='assisted' ? 'Assist' : 'Weight';
+  if(hasLoadField(metric)){
+    const label = metric==='assisted' ? 'Assist' : metric==='weighted_bw' ? 'Added kg' : 'Weight';
     return `<input type="number" step="0.5" min="0" inputmode="decimal" placeholder="${label}" value="${stage.weight!=null?stage.weight:''}" data-stage-weight="${idx}" style="flex:1;min-width:0;">
             <input type="number" min="0" inputmode="numeric" placeholder="Reps" value="${stage.reps!=null?stage.reps:''}" data-stage-reps="${idx}" style="flex:1;min-width:0;">`;
   }
@@ -47,7 +56,7 @@ function stageFieldsHtml(metric, stage, idx){
   return '';
 }
 function readStageFields(metric, root, idx){
-  if(metric==='weight_reps' || metric==='assisted'){
+  if(hasLoadField(metric)){
     const w = q(`[data-stage-weight="${idx}"]`,root), r = q(`[data-stage-reps="${idx}"]`,root);
     const weight = parseFloat(w.value), reps = parseInt(r.value,10);
     if(isNaN(weight)||isNaN(reps)||weight<0||reps<=0) return null;
