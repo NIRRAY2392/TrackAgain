@@ -51,6 +51,7 @@ function logNormalSet(exerciseId, values, effort, isWarmup, intent){
   persistLog(log);
   const set = {id:uid(), exerciseId, difficulty:effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:!!isWarmup, ...values};
   log.sets.push(set);
+  markWorkoutActivity(log);
   recomputePRs(exerciseId);
   saveData(DATA);
   return set;
@@ -182,6 +183,7 @@ function openLogSetSheet(opts){
       persistLog(log);
       const set = {id:uid(), exerciseId, difficulty:effort, intent:null, ts:Date.now(), isPR:false, isDropSet:true, stages:finalStages};
       log.sets.push(set);
+      markWorkoutActivity(log);
       saveData(DATA);
       closeSheets();
       showToast('Drop set logged 🔻');
@@ -477,6 +479,7 @@ function openSupersetLogSheet(members){
           recomputePRs(block.row.exerciseId);
           return set;
         });
+        markWorkoutActivity(log);
         saveData(DATA);
         closeSheets();
         if(saved.some(s=>s.isPR)) showToast('🏆 New personal record! You crushed it!', true);
@@ -922,12 +925,17 @@ function openDayEditor(dayKey){
   let draft = clone(splitDays()[dayKey]);
   let dirty = false;
   let selected = new Set(); // indices picked for "group into superset" — editor-only, not persisted
+  let openIdx = -1;         // the one expanded row — editor-only, not persisted
   let editorScroll = 0;
 
   const discard = ()=>{ closeSheets(); renderApp(); };
   const guard = ()=> dirty ? confirmAction('Discard unsaved changes to this day?', 'Discard', discard) : discard();
   const remapSelected = (mapper)=>{
     selected = new Set([...selected].map(mapper).filter(i=>i>=0 && i<draft.exercises.length));
+    if(openIdx>=0){
+      const next = mapper(openIdx);
+      openIdx = (next>=0 && next<draft.exercises.length) ? next : -1;
+    }
   };
 
   function draw(){
@@ -939,20 +947,22 @@ function openDayEditor(dayKey){
         const editingLiveDay = !!(liveWorkout && liveWorkout.dayKey===dayKey);
         body.appendChild(el(`
           <div class="day-editor">
-            <div class="field"><label>Day name</label><input id="dayName" value="${escapeHtml(draft.name)}" placeholder="e.g. Push, Pull, Rest"></div>
+            <div class="field day-name"><label>Day name</label><input id="dayName" value="${escapeHtml(draft.name)}" placeholder="e.g. Push, Pull, Rest"></div>
             ${editingLiveDay ? '<p class="day-live">This workout is already going. Saving updates the current split and today’s workout.</p>' : ''}
             <div class="day-editor-bar">
-              <span class="section-title">Exercises (${draft.exercises.length})</span>
-              <button class="btn secondary" data-copy>${icon('copy',16)} Copy day</button>
+              <span class="day-count">Exercises <span class="count-pill">${draft.exercises.length}</span></span>
+              <button class="btn ghost day-copy" data-copy>${icon('copy',16)} Copy day</button>
             </div>
-            <p class="faint small day-hint">Tick the checkbox on 2–4 exercises to group them into a superset.</p>
+            <p class="day-hint">Tap an exercise to edit it. Tick 2–4 boxes to group a superset.</p>
             <div data-group-bar></div>
             <div class="day-rows" data-rows></div>
             <div class="day-editor-actions">
-              <button class="btn secondary" data-add>${icon('plus',16)} Add exercise</button>
-              <button class="btn" data-save>Save day</button>
+              <div class="day-action-row">
+                <button class="btn secondary day-add" data-add>${icon('plus',16)} Add exercise</button>
+                <button class="btn day-save" data-save>${icon('check',16)} Save day</button>
+              </div>
+              <p class="day-foot">Nothing is saved until you tap Save day.</p>
             </div>
-            <p class="faint small day-foot">Nothing is saved until you tap Save day.</p>
           </div>`));
         q('#dayName',body).oninput = (e)=>{ draft.name = e.target.value; dirty = true; };
 
@@ -967,9 +977,9 @@ function openDayEditor(dayKey){
           };
           groupBar.appendChild(btn);
         } else if(selected.size>4){
-          groupBar.appendChild(el(`<p class="faint small" style="margin-bottom:10px;color:var(--red);">Supersets can have at most 4 exercises — deselect one to continue.</p>`));
+          groupBar.appendChild(el(`<p class="group-note warn">Supersets can have at most 4 exercises — deselect one to continue.</p>`));
         } else if(selected.size===1){
-          groupBar.appendChild(el(`<p class="faint small" style="margin-bottom:10px;">Select one more exercise (2-4 total) to group into a superset.</p>`));
+          groupBar.appendChild(el(`<p class="group-note">Select one more exercise (2-4 total) to group into a superset.</p>`));
         }
 
         const rowsBox = q('[data-rows]',body);
@@ -979,6 +989,8 @@ function openDayEditor(dayKey){
           markDirty:()=>{ dirty = true; },
           selected,
           remapSelected,
+          isOpen:(idx)=> idx===openIdx,
+          toggleOpen:(idx)=>{ openIdx = openIdx===idx ? -1 : idx; draw(); },
           toggleSelect:(idx)=>{ selected.has(idx) ? selected.delete(idx) : selected.add(idx); draw(); },
           ungroup:(groupId)=>{ draft.exercises.forEach(r=>{ if(r.supersetId===groupId) r.supersetId=null; }); dirty=true; draw(); },
           removeFromGroup:(idx)=>{
@@ -1008,7 +1020,11 @@ function openDayEditor(dayKey){
         q('[data-add]',body).onclick = ()=> openExercisePicker({
           title:`Add to ${DAY_LABELS[dayKey]}`,
           exclude: draft.exercises.map(r=>r.exerciseId),
-          onPick:(id)=>{ draft.exercises.push(newPlanRow(id,{goal:DATA.settings.goal})); dirty = true; draw(); }
+          onPick:(id)=>{
+            draft.exercises.push(newPlanRow(id,{goal:DATA.settings.goal}));
+            openIdx = draft.exercises.length-1;
+            dirty = true; draw();
+          }
         });
         q('[data-copy]',body).onclick = ()=> openCopyDaySheet(dayKey, draft, draw);
         q('[data-save]',body).onclick = ()=>{
@@ -1022,6 +1038,7 @@ function openDayEditor(dayKey){
         };
         const modal = q('.modal', sheet.node);
         if(modal){
+          modal.classList.add('day-sheet');
           modal.scrollTop = editorScroll;
           modal.onscroll = ()=>{ editorScroll = modal.scrollTop; };
         };
@@ -1029,6 +1046,18 @@ function openDayEditor(dayKey){
     });
   }
   draw();
+}
+
+/* "3 × 8–12 · RPE 8 · 1:30 rest" — the collapsed row's one-line summary. */
+function planRowSummary(row, metric){
+  const range = row.repsMin===row.repsMax ? `${row.repsMin}` : `${row.repsMin}–${row.repsMax}`;
+  const bits = [`${row.sets} × ${range}${metric==='time'?'s':''}`];
+  if(row.rpe!=null) bits.push(`RPE ${row.rpe}`);
+  const rest = restSecondsFor(row);
+  const m = Math.floor(rest/60), s = rest%60;
+  bits.push(rest===0 ? 'no rest' : rest<60 ? `${rest}s rest` : s ? `${m}:${String(s).padStart(2,'0')} rest` : `${m} min rest`);
+  if(row.oftenDoneAsDropSet) bits.push('drop set');
+  return bits.join(' · ');
 }
 
 /* One editable row inside the day editor. opts.inGroup adds a "remove from
@@ -1039,27 +1068,22 @@ function planRowEditor(row, idx, draft, ctx, opts){
   const ex = getExercise(row.exerciseId);
   const metric = metricOf(ex);
   const isSelected = ctx.selected.has(idx);
+  const isOpen = ctx.isOpen(idx);
   const node = el(`
-    <div class="plan-row ${isSelected?'selected':''}">
-      <div class="plan-head">
+    <div class="plan-row ${isSelected?'selected':''} ${isOpen?'open':''}">
+      <div class="plan-head" data-toggle role="button" tabindex="0" aria-expanded="${isOpen}">
         <label class="plan-check">
           <input type="checkbox" class="row-select" data-select ${isSelected?'checked':''} title="Select for superset" aria-label="Select for superset">
         </label>
-        <div class="plan-ident">
-          <span class="plan-idx">${idx+1}</span>
-          <div class="copy">
-            <div class="nm">${escapeHtml(ex ? ex.name : 'Unknown exercise')}</div>
-            <div class="faint small sub">${ex ? escapeHtml(exerciseSubtitle(ex)) : ''}</div>
-          </div>
+        <span class="plan-idx">${idx+1}</span>
+        <div class="plan-copy">
+          <div class="nm">${escapeHtml(ex ? ex.name : 'Unknown exercise')}</div>
+          <div class="plan-summary" data-summary>${escapeHtml(planRowSummary(row, metric))}</div>
         </div>
+        <span class="plan-chev" aria-hidden="true">${icon('chevronDown',18)}</span>
       </div>
-      <div class="plan-tools">
-        ${opts.inGroup?'<button class="iconbtn" data-ungroup-one title="Remove from superset" aria-label="Remove from superset">'+icon('link',16)+'</button>':''}
-        <button class="iconbtn" data-up ${idx===0?'disabled':''} title="Move up" aria-label="Move up">${icon('chevronUp',16)}</button>
-        <button class="iconbtn" data-down ${idx===draft.exercises.length-1?'disabled':''} title="Move down" aria-label="Move down">${icon('chevronDown',16)}</button>
-        <button class="iconbtn" data-duplicate title="Duplicate" aria-label="Duplicate">${icon('copy',16)}</button>
-        <button class="iconbtn danger" data-remove title="Remove" aria-label="Remove">${icon('trash',16)}</button>
-      </div>
+      <div class="plan-body">
+      ${ex ? `<div class="plan-sub">${escapeHtml(exerciseSubtitle(ex))}</div>` : ''}
       <div class="plan-metrics">
         <div><label>Sets</label><input type="number" min="1" inputmode="numeric" value="${row.sets}" data-field="sets"></div>
         <div><label>${metric==='time'?'Min sec':'Min reps'}</label><input type="number" min="1" inputmode="numeric" value="${row.repsMin}" data-field="repsMin"></div>
@@ -1071,17 +1095,33 @@ function planRowEditor(row, idx, draft, ctx, opts){
         <div class="field" style="margin:0;"><label>Rest (sec)</label><input type="number" min="0" inputmode="numeric" value="${row.restSeconds!=null?row.restSeconds:''}" data-field="restSeconds" placeholder="${defaultRestSeconds()}"></div>
       </div>
       <label class="plan-drop">
-        <input type="checkbox" data-often-drop ${row.oftenDoneAsDropSet?'checked':''}>
-        <span>Often done as a drop set <span class="faint">· hint only</span></span>
+        <span>Often done as a drop set <span class="hint">· hint only</span></span>
+        <input type="checkbox" class="switch" data-often-drop ${row.oftenDoneAsDropSet?'checked':''}>
       </label>
       <div class="plan-links">
         <button class="btn secondary" data-alternatives>${icon('lightbulb',16)} Alternatives</button>
-        <button class="btn secondary" data-swap>Replace</button>
+        <button class="btn secondary" data-swap>${icon('reopen',16)} Replace</button>
+      </div>
+      <div class="plan-tools">
+        ${opts.inGroup?'<button class="iconbtn" data-ungroup-one title="Remove from superset" aria-label="Remove from superset">'+icon('link',16)+'</button>':''}
+        <button class="iconbtn" data-up ${idx===0?'disabled':''} title="Move up" aria-label="Move up">${icon('chevronUp',16)}</button>
+        <button class="iconbtn" data-down ${idx===draft.exercises.length-1?'disabled':''} title="Move down" aria-label="Move down">${icon('chevronDown',16)}</button>
+        <button class="iconbtn" data-duplicate title="Duplicate" aria-label="Duplicate">${icon('copy',16)}</button>
+        <button class="iconbtn danger" data-remove title="Remove" aria-label="Remove">${icon('trash',16)} <span>Remove</span></button>
+      </div>
       </div>
     </div>`);
 
+  const summary = q('[data-summary]',node);
+  const refreshSummary = ()=>{ summary.textContent = planRowSummary(row, metric); };
+  const head = q('[data-toggle]',node);
+  head.onclick = (e)=>{ if(!e.target.closest('.plan-check')) ctx.toggleOpen(idx); };
+  head.onkeydown = (e)=>{
+    if(e.target!==head || (e.key!=='Enter' && e.key!==' ')) return;
+    e.preventDefault(); ctx.toggleOpen(idx);
+  };
   q('[data-select]',node).onchange = ()=> ctx.toggleSelect(idx);
-  q('[data-often-drop]',node).onchange = (e)=>{ row.oftenDoneAsDropSet = e.target.checked; markDirty(); };
+  q('[data-often-drop]',node).onchange = (e)=>{ row.oftenDoneAsDropSet = e.target.checked; markDirty(); refreshSummary(); };
   const ungroupOneBtn = q('[data-ungroup-one]',node);
   if(ungroupOneBtn) ungroupOneBtn.onclick = ()=> ctx.removeFromGroup(idx);
 
@@ -1091,16 +1131,16 @@ function planRowEditor(row, idx, draft, ctx, opts){
     if(field==='rpe'){
       const value = parseFloat(input.value);
       row.rpe = isNaN(value) ? null : Math.min(10, Math.max(5, value));
-      markDirty(); return;
+      markDirty(); refreshSummary(); return;
     }
     if(field==='restSeconds'){
       const raw = input.value.trim();
       row.restSeconds = raw==='' ? null : Math.max(0, parseInt(raw,10)||0);
-      markDirty(); return;
+      markDirty(); refreshSummary(); return;
     }
     const value = parseInt(input.value,10);
     if(isNaN(value) || value<1) return;
-    row[field] = value; markDirty();
+    row[field] = value; markDirty(); refreshSummary();
   });
   const swapRows = (a,b)=>{
     const tmp = draft.exercises[a]; draft.exercises[a] = draft.exercises[b]; draft.exercises[b] = tmp;

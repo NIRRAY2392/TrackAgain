@@ -8,7 +8,7 @@ renderApp();
 
 document.addEventListener('visibilitychange', ()=>{
   if(document.hidden) pauseWorkoutForBackground();
-  else if(maybeAfkCloseWorkout()) renderApp();
+  else if(maybeTrimAwayTime()) renderApp();
   else syncWorkoutTimer();
 });
 window.addEventListener('pagehide', pauseWorkoutForBackground);
@@ -17,7 +17,7 @@ const capApp = capacitorAppPlugin();
 if(capApp && capApp.addListener){
   capApp.addListener('appStateChange', (state)=>{
     if(state && state.isActive===false) pauseWorkoutForBackground();
-    else if(maybeAfkCloseWorkout()) renderApp();
+    else if(maybeTrimAwayTime()) renderApp();
     else syncWorkoutTimer();
   });
   capApp.addListener('backButton', ()=>{

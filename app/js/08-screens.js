@@ -37,7 +37,7 @@ function backToLanding(){
 }
 
 function renderApp(){
-  maybeAfkCloseWorkout();
+  maybeTrimAwayTime();
   destroyHistoryCharts();
   afterHistoryRender = [];
   const app = document.getElementById('app');
@@ -114,7 +114,7 @@ function paintWorkoutTimer(){
   node.textContent = formatWorkoutClock(workoutElapsedMs(log));
 }
 function tickWorkoutTimer(){
-  if(maybeAfkCloseWorkout()){ renderApp(); return; }
+  maybeTrimAwayTime();
   discountSuspendedGap();
   const log = activeWorkoutLog();
   if(!log || document.hidden){
@@ -174,25 +174,30 @@ function lastWorkoutActivityAt(log){
   (log.sets||[]).forEach(s=>{ if(s.ts && s.ts>t) t = s.ts; });
   return t;
 }
-/* Save and close a stale session. Last set (or start) older than 3 hours. */
-function maybeAfkCloseWorkout(){
+/* Remembers the clock reading at the last real action (start, reopen, set). */
+function markWorkoutActivity(log){
+  if(!log) return;
+  log.activityAt = Date.now();
+  log.activityElapsedMs = workoutElapsedMs(log);
+}
+/* After 3+ hours with no activity, take the time away off the clock.
+   The workout stays open; it is never closed automatically. */
+function maybeTrimAwayTime(){
   const log = activeWorkoutLog();
   if(!log) return false;
-  const last = lastWorkoutActivityAt(log);
-  if(!last || Date.now() - last < AFK_CLOSE_MS) return false;
   const now = Date.now();
+  const last = log.activityAt || lastWorkoutActivityAt(log);
+  if(!last || now - last < AFK_CLOSE_MS) return false;
   discountSuspendedGap();
-  if(log.timerRunningSince){
-    log.elapsedMs = Math.max(0, workoutElapsedMs(log, now) - (now - last));
-    log.timerRunningSince = null;
-  }
-  clearWorkoutTicker();
-  log.endedAt = last;
-  log.active = false;
-  log.completed = true;
-  homeScreen = 'landing';
+  const current = workoutElapsedMs(log, now);
+  const atLast = (typeof log.activityElapsedMs==='number' && isFinite(log.activityElapsedMs))
+    ? log.activityElapsedMs
+    : Math.max(0, current - (now - last));
+  log.elapsedMs = Math.max(0, Math.min(current, atLast));
+  log.timerRunningSince = document.hidden ? null : now;
+  markWorkoutActivity(log);
   saveData(DATA);
-  showToast('Workout saved after 3 hours away');
+  showToast('Welcome back. Time away was left off the timer');
   return true;
 }
 
@@ -208,6 +213,7 @@ function startWorkout(){
   if(typeof log.elapsedMs!=='number' || !isFinite(log.elapsedMs) || log.elapsedMs<0) log.elapsedMs = 0;
   log.timerRunningSince = null;
   log.completed = false;
+  markWorkoutActivity(log);
   homeScreen = 'workout';
   VIEW = 'today';
   saveData(DATA);
@@ -218,6 +224,7 @@ function reopenWorkout(log){
   log.active = true; log.completed = false; log.endedAt = null;
   if(typeof log.elapsedMs!=='number' || !isFinite(log.elapsedMs) || log.elapsedMs<0) log.elapsedMs = 0;
   log.timerRunningSince = null;
+  markWorkoutActivity(log);
   homeScreen = 'workout';
   VIEW = 'today';
   saveData(DATA);
