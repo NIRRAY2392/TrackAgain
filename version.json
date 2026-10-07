@@ -1,0 +1,14 @@
+{
+    "version":  "1.4.0",
+    "build":  5,
+    "date":  "2026-10-07",
+    "apk":  "downloads/TrackAgain.apk",
+    "apkSize":  4219342,
+    "notes":  "downloads/",
+    "highlights":  [
+                       "Live coaching on every exercise card",
+                       "The rest-complete alert now says what is next",
+                       "A rest alert could still go off after you stopped the timer or finished the workout",
+                       "PR preview while you set up a set"
+                   ]
+}

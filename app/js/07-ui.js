@@ -25,7 +25,8 @@ const ICON_PATHS = {
   link:'<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M8 12h8"/>',
   timer:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M10 2h4"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
-  dumbbell:'<path d="M6.5 6.5v11"/><path d="M17.5 6.5v11"/><path d="M4 9v6"/><path d="M20 9v6"/><path d="M6.5 12h11"/>'
+  dumbbell:'<path d="M6.5 6.5v11"/><path d="M17.5 6.5v11"/><path d="M4 9v6"/><path d="M20 9v6"/><path d="M6.5 12h11"/>',
+  download:'<path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/>'
 };
 function icon(name, size){
   size = size || 20;
@@ -34,9 +35,9 @@ function icon(name, size){
 function logoMarkHtml(){
   return `<svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000000" stroke-width="2.4" stroke-linecap="round"/></svg>`;
 }
-function currentTheme(){ return document.documentElement.getAttribute('data-theme')==='light' ? 'light' : 'dark'; }
+function currentTheme(){ return document.documentElement.getAttribute('data-theme')==='dark' ? 'dark' : 'light'; }
 function setTheme(theme){
-  const next = theme==='light' ? 'light' : 'dark';
+  const next = theme==='dark' ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', next);
   try{ localStorage.setItem(THEME_KEY, next); }catch(_){}
 }
@@ -55,10 +56,21 @@ function showToast(message, isPR, action){
   if(action) root.querySelector('.toast-action').onclick = ()=>{ clear(); action.onClick(); };
   toastTimer = setTimeout(clear, action ? 4000 : (isPR?2600:1800));
 }
-function celebrateSet(set){
-  if(set.isPR) showToast('🏆 New personal record! You crushed it!', true);
-  else showToast(HYPE_MESSAGES[Math.floor(Math.random()*HYPE_MESSAGES.length)]);
+/* Light tick on every log; a double pulse for PRs and finishing the target sets. */
+function hapticTick(strong){
+  const H = capPlugin('Haptics');
+  if(H){
+    H.impact({style: strong ? 'HEAVY' : 'LIGHT'}).catch(()=>{});
+    if(strong) setTimeout(()=> H.impact({style:'HEAVY'}).catch(()=>{}), 140);
+  } else if(navigator.vibrate) navigator.vibrate(strong ? [35,90,35] : 12);
 }
+/* The exercise card's coach line gives the feedback; only PRs earn a toast. */
+function celebrateSets(sets, milestone){
+  const pr = sets.some(s=>s.isPR);
+  if(pr) showToast('🏆 New personal record! You crushed it!', true);
+  hapticTick(pr || !!milestone);
+}
+function celebrateSet(set, milestone){ celebrateSets([set], milestone); }
 function confirmAction(message, confirmLabel, onConfirm){
   const root = document.getElementById('confirmRoot');
   const box = el(`
@@ -102,7 +114,7 @@ function chooseAction(message, primaryLabel, onPrimary, secondaryLabel, onSecond
 }
 
 /* One bottom sheet implementation for every modal in the app.
-   opts: {root, title, zIndex, centered, onBack, onRequestClose, onClosed, build(body, sheet)} */
+   opts: {root, title, zIndex, centered, drag, startFull, onBack, onRequestClose, onClosed, build(body, sheet)} */
 const SHEET_ROOT = {main:'modalRoot', picker:'pickerRoot', form:'formRoot'};
 let overlayStack = 0;
 let ignoreHistoryPop = false;
@@ -114,6 +126,17 @@ function overlayIsOpen(){
     return n && n.innerHTML.trim();
   });
 }
+/* The page behind an open sheet or dialog must not scroll. */
+function syncOverlayLock(){
+  document.documentElement.classList.toggle('overlay-open', overlayIsOpen());
+}
+(function watchOverlayRoots(){
+  const observer = new MutationObserver(syncOverlayLock);
+  [...Object.values(SHEET_ROOT), 'confirmRoot'].forEach(id=>{
+    const n = document.getElementById(id);
+    if(n) observer.observe(n, {childList:true});
+  });
+})();
 function capPlugin(name){
   try{ return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins[name]) || null; }
   catch(_){ return null; }
@@ -129,6 +152,12 @@ function setScreenAwake(on){
   screenKeptAwake = want;
   const call = want ? plugin.keepAwake : plugin.allowSleep;
   if(typeof call==='function') Promise.resolve(call.call(plugin)).catch(()=>{ screenKeptAwake = !want; });
+}
+/* Android app only: hide the status and navigation bars (Settings → Full screen). */
+function setFullscreen(on){
+  const plugin = capPlugin('Fullscreen');
+  if(!plugin || typeof plugin.set!=='function') return;
+  Promise.resolve(plugin.set({enabled:!!on})).catch(()=>{});
 }
 function pushOverlayHistory(){
   overlayStack++;
@@ -180,9 +209,11 @@ function openSheet(opts){
   const root = document.getElementById(opts.root || SHEET_ROOT.main);
   const bgStyle = `${opts.zIndex?`z-index:${opts.zIndex};`:''}${opts.centered?'align-items:center;':''}`;
   const boxStyle = opts.centered ? 'border-radius:18px;max-width:380px;width:88%;animation:none;' : '';
+  const draggable = !opts.centered && opts.drag!==false;
   const node = el(`
     <div class="modal-bg" style="${bgStyle}">
       <div class="modal" style="${boxStyle}">
+        ${draggable ? '<div class="sheet-grab" aria-hidden="true"></div>' : ''}
         ${opts.title!=null ? `<div class="modal-top">
             <div class="row" style="min-width:0;">
               ${opts.onBack?'<button class="back-x" data-back aria-label="Back">'+icon('chevronLeft',20)+'</button>':''}
@@ -206,11 +237,158 @@ function openSheet(opts){
   const backBtn  = q('[data-back]',node);  if(backBtn)  backBtn.onclick  = ()=> opts.onBack(sheet);
   node.onclick = (e)=>{ if(e.target===node) requestClose(); };
   const replacing = !!(root.innerHTML && root.innerHTML.trim());
+  const prevState = replacing ? root._sheetState : null;
   root.innerHTML=''; root.appendChild(node);
   root._requestClose = ()=>{ if(root.contains(node)) requestClose(); };
   if(!replacing) pushOverlayHistory();
   if(opts.build) opts.build(sheet.body, sheet);
+  if(draggable) attachSheetDrag(root, node, q('.modal',node), requestClose, opts, prevState);
   return sheet;
+}
+
+/* Bottom sheets taller than the "peek" height (60% of the screen) open at peek
+   so the page behind stays visible. Swiping or scrolling up raises them to full
+   height; pulling down from the top of the content lowers them back to peek,
+   and pulling below the resting height closes them. The state is kept on the
+   root so a sheet redrawn in place (pickers, editors) doesn't drop back down. */
+const SHEET_PEEK = 0.6, SHEET_MIN_PEEK = 48, SHEET_SNAP_MS = 280;
+function attachSheetDrag(root, node, modal, requestClose, opts, prevState){
+  let state = prevState || (opts.startFull ? 'full' : null);
+  let H = 0, peek = 0, offset = 0, drag = null, closing = false;
+  let lastScrollAt = 0, lastWheelAt = 0;
+  node.classList.add('sheet-drag');
+
+  const measure = ()=>{
+    H = modal.offsetHeight;
+    const extra = H - Math.round(window.innerHeight*SHEET_PEEK);
+    peek = extra >= SHEET_MIN_PEEK ? extra : 0;
+    if(!peek) state = 'full';
+    else if(!state) state = 'peek';
+  };
+  const rest = ()=> state==='peek' ? peek : 0;
+  const paint = (y, animate)=>{
+    offset = y;
+    node.classList.toggle('snapping', !!animate);
+    modal.style.transform = y ? `translateY(${y}px)` : '';
+    const fade = y<=peek ? 1 : Math.max(0, 1-(y-peek)/Math.max(1, H-peek));
+    node.style.setProperty('--sheet-fade', fade.toFixed(3));
+    root._sheetState = state;
+  };
+  const setState = (s, animate)=>{ state = (s==='peek' && peek) ? 'peek' : 'full'; paint(rest(), animate); };
+  const dismiss = ()=>{
+    closing = true;
+    paint(H, true);
+    setTimeout(()=>{
+      closing = false;
+      if(!root.contains(node)) return;
+      requestClose();
+      if(root.contains(node)) paint(rest(), true);
+    }, SHEET_SNAP_MS);
+  };
+  const release = (v)=>{
+    const projected = offset + (Math.abs(v) > 0.5 ? v*150 : 0);
+    if(projected > peek + Math.min(160, Math.max(80, (H-peek)/3))) return dismiss();
+    if(Math.abs(v) > 0.5) setState(v<0 ? 'full' : 'peek', true);
+    else setState(peek && offset > peek/2 ? 'peek' : 'full', true);
+  };
+
+  /* drag gestures (touch anywhere on the sheet, mouse on the header) */
+  const isHandle = (t)=> !!t.closest('.sheet-grab,.modal-top');
+  const start = (x, y, target)=>{
+    if(closing || target.closest('input[type=range],canvas,select,[data-no-drag]')){ drag = null; return; }
+    drag = {x0:x, y0:y, handle:isHandle(target), on:false, y, t:performance.now(), v:0};
+  };
+  const move = (x, y, e)=>{
+    if(!drag) return;
+    const dx = x-drag.x0, dy = y-drag.y0;
+    if(!drag.on){
+      if(!dy && state!=='peek') return;
+      const canDrag = state==='peek' || (dy>0 && (modal.scrollTop<=0 || drag.handle));
+      if(!canDrag){ drag = null; return; }
+      if(e.cancelable) e.preventDefault();
+      if(Math.abs(dx)<6 && Math.abs(dy)<6) return;
+      if(Math.abs(dx) > Math.abs(dy)){ drag = null; return; }
+      drag.on = true; drag.base = offset; drag.y0 = y;
+      drag.y = y; drag.t = performance.now(); drag.v = 0;
+      node.classList.add('dragging');
+    }
+    if(e.cancelable) e.preventDefault();
+    const now = performance.now(), dt = now-drag.t;
+    if(dt>=4){
+      drag.v = 0.8*((y-drag.y)/dt) + 0.2*drag.v;
+      drag.t = now; drag.y = y;
+    }
+    paint(Math.max(0, drag.base + (y-drag.y0)), false);
+  };
+  const end = ()=>{
+    if(drag && drag.on){
+      node.classList.remove('dragging');
+      release(performance.now()-drag.t > 80 ? 0 : drag.v);
+    }
+    drag = null;
+  };
+  modal.addEventListener('touchstart', (e)=>{
+    if(e.touches.length!==1){ drag = null; return; }
+    start(e.touches[0].clientX, e.touches[0].clientY, e.target);
+  }, {passive:true});
+  modal.addEventListener('touchmove', (e)=>{
+    if(drag) move(e.touches[0].clientX, e.touches[0].clientY, e);
+  }, {passive:false});
+  modal.addEventListener('touchend', end);
+  modal.addEventListener('touchcancel', end);
+  modal.addEventListener('mousedown', (e)=>{
+    if(e.button!==0 || !isHandle(e.target) || e.target.closest('button')) return;
+    start(e.clientX, e.clientY, e.target);
+    const mm = (ev)=> move(ev.clientX, ev.clientY, ev);
+    const mu = ()=>{ window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); end(); };
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+  });
+
+  /* mouse wheel / trackpad: a fresh scroll-up gesture at the top collapses,
+     momentum carried over from scrolling the content does not */
+  modal.addEventListener('scroll', ()=>{
+    lastScrollAt = performance.now();
+    if(state==='peek' && modal.scrollTop>0 && !drag && !closing) setState('full', true);
+  }, {passive:true});
+  modal.addEventListener('wheel', (e)=>{
+    const now = performance.now(), gap = now-lastWheelAt;
+    lastWheelAt = now;
+    if(drag || closing || !peek) return;
+    if(state==='peek' && e.deltaY>0){ e.preventDefault(); setState('full', true); }
+    else if(state==='full' && e.deltaY<0 && modal.scrollTop<=0 && gap>250 && now-lastScrollAt>250){
+      e.preventDefault(); setState('peek', true);
+    }
+  }, {passive:false});
+
+  /* typing needs the whole sheet above the keyboard */
+  const TYPING = 'textarea,input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=submit])';
+  modal.addEventListener('focusin', (e)=>{
+    if(state==='peek' && e.target.matches(TYPING)) setState('full', true);
+  });
+
+  /* content or viewport size changes (search results, rotation, keyboard) */
+  const refit = ()=>{
+    if(!root.contains(node)){
+      if(ro) ro.disconnect();
+      window.removeEventListener('resize', refit);
+      return;
+    }
+    const oldH = H, oldPeek = peek;
+    measure();
+    if((H!==oldH || peek!==oldPeek) && !closing && !(drag && drag.on)) paint(rest(), false);
+  };
+  const ro = window.ResizeObserver ? new ResizeObserver(refit) : null;
+  if(ro) ro.observe(modal);
+  window.addEventListener('resize', refit);
+
+  measure();
+  if(state==='peek' && document.activeElement && modal.contains(document.activeElement)
+     && document.activeElement.matches(TYPING)) state = 'full';
+  if(prevState){ paint(rest(), false); return; }
+  paint(H, false);
+  void modal.offsetHeight;
+  paint(rest(), true);
 }
 function closeSheets(){
   const n = overlayStack;
@@ -340,7 +518,7 @@ function lastLoggedBits(exerciseId){
   const set = pick[pick.length-1];
   return {date:last.date, text:setValueText(set, metric), difficulty:set.difficulty, set};
 }
-function setDotsHtml(done, target){
+function setDotsHtml(done, target, freshIndex){
   const n = Math.max(target, done, 0);
   if(!n) return '';
   const extra = Math.max(done - target, 0);
@@ -350,7 +528,7 @@ function setDotsHtml(done, target){
   let html = '<div class="set-dots" role="img" aria-label="'+label+'">';
   for(let i=0;i<n;i++){
     const cls = i<done ? (i<target ? 'on' : 'bonus') : '';
-    html += `<span class="set-dot ${cls}"></span>`;
+    html += `<span class="set-dot ${cls}${i===freshIndex?' fresh':''}"></span>`;
   }
   return html+'</div>';
 }
@@ -376,7 +554,13 @@ function setDotsHtml(done, target){
 const REST_NOTIFY_CHANNEL = 'rest-heads-up-v2';
 const REST_NOTIFY_CHANNEL_OLD = 'rest-heads-up-v1';
 const WORKOUT_REST_ID = 'workout';
-const restTimers = {}; // WORKOUT_REST_ID -> {end, seconds, name}
+const restTimers = {}; // WORKOUT_REST_ID -> {end, seconds, name, token}
+let restSeq = 0;
+/* Scheduling is async; a timer stopped meanwhile must not leave a notification behind. */
+function restTimerLive(exerciseId, token){
+  const t = restTimers[exerciseId];
+  return !!t && t.token===token;
+}
 let restTicker = null;
 
 function restNotificationsAvailable(){ return !!capPlugin('LocalNotifications'); }
@@ -385,12 +569,8 @@ function restNotificationId(exerciseId){
   let h = 0; for(let i=0;i<exerciseId.length;i++) h = (h*31 + exerciseId.charCodeAt(i)) | 0;
   return Math.abs(h) % 2000000000;
 }
-function restNotifyCopy(exerciseName){
-  const title = 'Rest complete';
-  const body = exerciseName
-    ? `Rest complete – ready for your next set of ${exerciseName}`
-    : 'Rest complete – ready for your next set';
-  return {title, body};
+function restNotifyCopy(){
+  return {title:'Rest complete', body:restUpNextText()};
 }
 function isAndroidApp(){
   try{ return !!(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform()==='android'); }
@@ -451,7 +631,7 @@ function rescheduleActiveRestNotifications(){
   Object.keys(restTimers).forEach(id=>{
     const t = restTimers[id];
     if(!t) return;
-    scheduleRestNotification(id, Math.max(1, Math.round((t.end-Date.now())/1000)), t.name);
+    scheduleRestNotification(id, Math.max(1, Math.round((t.end-Date.now())/1000)), t.name, t.token);
   });
 }
 let restSetupRunning = false;
@@ -548,19 +728,21 @@ async function ensureRestNotifyPermission(){
     return false;
   }
 }
-async function scheduleRestNotification(exerciseId, seconds, exerciseName){
-  if(!DATA.settings.restNotify) return;
-  const {title, body} = restNotifyCopy(exerciseName);
+async function scheduleRestNotification(exerciseId, seconds, exerciseName, token){
+  if(!DATA.settings.restNotify || !restTimerLive(exerciseId, token)) return;
+  const {title, body} = restNotifyCopy();
   const waitMs = Math.max(1000, Math.round(seconds*1000));
   if(restNotificationsAvailable()){
     const LocalNotifications = capPlugin('LocalNotifications');
     const id = restNotificationId(exerciseId);
     const at = new Date(Date.now()+waitMs);
     const exact = await exactAlarmStatus();
+    if(!restTimerLive(exerciseId, token)) return;
     /* Denied exact alarms must not be requested again here: LocalNotifications
        opens Alarms & reminders on every exact schedule until the user allows it. */
     const schedule = {at, allowWhileIdle:true, isExactNotification: exact!=='denied'};
     LocalNotifications.cancel({notifications:[{id}]}).catch(()=>{}).finally(()=>{
+      if(!restTimerLive(exerciseId, token)) return;
       LocalNotifications.schedule({notifications:[{
         id,
         title,
@@ -578,6 +760,7 @@ async function scheduleRestNotification(exerciseId, seconds, exerciseName){
   if(t && t.webNoteTimer){ clearTimeout(t.webNoteTimer); t.webNoteTimer = null; }
   if(t && 'Notification' in window && Notification.permission==='granted'){
     t.webNoteTimer = setTimeout(()=>{
+      if(!restTimerLive(exerciseId, token)) return;
       try{
         const n = new Notification(title, {body, tag:'trackagain-rest', requireInteraction:true, silent:false, vibrate:[400,120,400]});
         n.onclick = ()=>{ try{ window.focus(); n.close(); }catch(_){ } };
@@ -591,6 +774,17 @@ function cancelRestNotification(exerciseId){
   if(!restNotificationsAvailable()) return;
   capPlugin('LocalNotifications').cancel({notifications:[{id:restNotificationId(exerciseId)}]}).catch(()=>{});
 }
+/* After a workout ends: also drop any pending rest alert that slipped past its timer. */
+function cancelAllRestNotifications(){
+  cancelRestNotification(WORKOUT_REST_ID);
+  if(!restNotificationsAvailable()) return;
+  const LN = capPlugin('LocalNotifications');
+  if(typeof LN.getPending!=='function') return;
+  LN.getPending().then(res=>{
+    const rest = ((res && res.notifications) || []).filter(n=> n && n.extra && n.extra.type==='rest');
+    if(rest.length) return LN.cancel({notifications:rest.map(n=>({id:n.id}))});
+  }).catch(()=>{});
+}
 function vibrateRestEnd(){
   if(!DATA.settings.restVibrate) return;
   if(hapticsAvailable()){
@@ -601,7 +795,7 @@ function vibrateRestEnd(){
 }
 function alertRestEndedSecondary(){
   vibrateRestEnd();
-  showToast('Rest complete – ready for your next set');
+  showToast(restUpNextText());
 }
 function formatMinSec(seconds){
   const m = Math.floor(seconds/60), s = seconds%60;
@@ -623,14 +817,16 @@ function restProgressPct(exerciseId){
   return Math.max(0, Math.min(100, Math.round((1 - remain/(t.seconds*1000)) * 100)));
 }
 async function startRestTimer(exerciseId, seconds, exerciseName){
-  if(!seconds || seconds<=0) return;
+  if(!seconds || seconds<=0 || !activeWorkoutLog()) return;
   if(restTimers[exerciseId]) cancelRestNotification(exerciseId);
-  restTimers[exerciseId] = {end: Date.now()+seconds*1000, seconds, name: exerciseName};
+  const token = ++restSeq;
+  restTimers[exerciseId] = {end: Date.now()+seconds*1000, seconds, name: exerciseName, token};
   if(!restTicker) restTicker = setInterval(tickRestTimers, 250);
   refreshTimerBar();
   if(DATA.settings.restNotify){
     const ok = await ensureRestNotifyPermission();
-    if(ok) await scheduleRestNotification(exerciseId, seconds, exerciseName);
+    if(!restTimerLive(exerciseId, token)) return;
+    if(ok) await scheduleRestNotification(exerciseId, seconds, exerciseName, token);
     else showToast('Allow notifications for '+APP_NAME+' in phone settings so rest can alert you in other apps');
     if(ok) ensureRestAlertsReady();
   }
@@ -638,7 +834,7 @@ async function startRestTimer(exerciseId, seconds, exerciseName){
 function extendRestTimer(exerciseId, extraSeconds){
   const t = restTimers[exerciseId]; if(!t) return;
   t.end += extraSeconds*1000; t.seconds += extraSeconds;
-  if(DATA.settings.restNotify) scheduleRestNotification(exerciseId, Math.max(1, Math.round((t.end-Date.now())/1000)), t.name);
+  if(DATA.settings.restNotify) scheduleRestNotification(exerciseId, Math.max(1, Math.round((t.end-Date.now())/1000)), t.name, t.token);
   refreshTimerBar();
 }
 function stopRestTimer(exerciseId){ cancelRestNotification(exerciseId); delete restTimers[exerciseId]; refreshTimerBar(); }

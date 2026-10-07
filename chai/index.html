@@ -23,10 +23,11 @@ button,input{font:inherit;color:inherit;}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0 22px;}
 .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:15px;letter-spacing:-0.01em;color:var(--text-dim);}
 .brand svg{width:26px;height:26px;border-radius:8px;}
-.back{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 15px;border-radius:999px;border:1.5px solid var(--spark);color:var(--spark);
-  font-weight:800;font-size:14px;white-space:nowrap;transition:background .15s ease, color .15s ease;}
-.back:hover,.back:active{background:var(--spark);color:#000;}
-.back svg{width:16px;height:16px;}
+.tabs{display:inline-flex;gap:2px;padding:4px;border:1px solid var(--border);border-radius:999px;background:var(--surface);}
+.tabs a{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;font-size:13.5px;font-weight:700;color:var(--text-dim);white-space:nowrap;}
+.tabs a:hover{color:var(--text);}
+.tabs a[aria-current="page"]{background:var(--spark);color:#000;}
+@media (max-width:440px){ .brand span{display:none;} .tabs a{padding:0 11px;} }
 h1{font-size:30px;line-height:1.1;letter-spacing:-0.03em;font-weight:800;margin:0 0 18px;}
 h1 span{color:var(--spark);}
 
@@ -114,12 +115,13 @@ body.desktop .qr-box{width:240px;height:240px;}
   <header>
     <a class="brand" href="../">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#e1ff00"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000" stroke-width="2.4" stroke-linecap="round"/></svg>
-      TrackA'gain
+      <span>TrackA'gain</span>
     </a>
-    <a class="back" href="../">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
-      Back to TrackA'gain
-    </a>
+    <nav class="tabs" aria-label="Site">
+      <a href="../">Home</a>
+      <a href="../downloads/">Download</a>
+      <a href="./" aria-current="page">Chai me up</a>
+    </nav>
   </header>
 
   <div class="layout">

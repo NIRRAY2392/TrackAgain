@@ -164,6 +164,28 @@ function commitExerciseToSplit(log, exerciseId){
   showToast('Added to your split');
   renderApp();
 }
+/* Index just past the last exercise with a set logged today. Added and newly
+   started exercises go here, so finished work stays on top in the order it
+   happened and untouched exercises keep their order below. */
+function indexAfterStarted(log, rows, skipIds){
+  let at = 0;
+  rows.forEach((r,i)=>{ if(!skipIds.has(r.exerciseId) && setsInLogFor(log, r.exerciseId).length) at = i+1; });
+  return at;
+}
+/* Called when a set is logged: an exercise started further down moves up
+   under the ones already worked on. A superset moves as one block. */
+function promoteStartedExercise(log, exerciseId){
+  if(!Array.isArray(log.plan)) return;
+  const row = log.plan.find(r=>r.exerciseId===exerciseId);
+  if(!row) return;
+  const ids = new Set((row.supersetId ? log.plan.filter(r=>r.supersetId===row.supersetId) : [row]).map(r=>r.exerciseId));
+  const first = log.plan.findIndex(r=>ids.has(r.exerciseId));
+  const rest = log.plan.filter(r=>!ids.has(r.exerciseId));
+  const at = indexAfterStarted(log, rest, ids);
+  if(first <= at) return;
+  rest.splice(at, 0, ...log.plan.filter(r=>ids.has(r.exerciseId)));
+  log.plan = rest;
+}
 function addExerciseToActiveWorkout(exerciseId){
   const log = todayLog();
   if(!log.active){ showToast('Start the workout first'); return; }
@@ -174,9 +196,10 @@ function addExerciseToActiveWorkout(exerciseId){
   const dayKey = log.dayKey || weekdayKey();
   const inSplit = exerciseInSplit(dayKey, exerciseId);
   row.sessionOnly = !inSplit;
-  plan.push(row);
+  plan.splice(indexAfterStarted(log, plan, new Set()), 0, row);
   saveData(DATA);
   renderApp();
+  scrollCardIntoView(exerciseId);
   if(inSplit){ showToast('Added to this workout'); return; }
   const name = (getExercise(exerciseId)||{}).name || 'This exercise';
   const dayLabel = DAY_LABELS[dayKey] || 'this day';

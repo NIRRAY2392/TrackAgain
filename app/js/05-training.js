@@ -214,11 +214,11 @@ function sessionQualifiesForIncrease(session, referenceWeight, repsTarget, setsN
 }
 
 const FIRST_SESSION_COPY = {
-  weight_reps:'No history yet — pick a weight you can control for the full rep range, then log it.',
-  reps_only:'No history yet — do as many clean reps as you can, then log it.',
-  time:'No history yet — hold as long as you can with good form, then log it.',
-  assisted:'No history yet — pick an assistance level that lets you complete the reps, then log it.',
-  weighted_bw:'No history yet — do clean reps at bodyweight (add weight only if it is easy), then log it.'
+  weight_reps:"Set 1 · find your working weight. Log it and I'll tune set 2.",
+  reps_only:"Set 1 · your baseline. Clean reps, then I'll set the bar.",
+  time:"Set 1 · your baseline hold. Log it and I'll set the target.",
+  assisted:"Set 1 · find your assistance level. Log it and I'll tune set 2.",
+  weighted_bw:"Set 1 · start at bodyweight. Log it and I'll tell you if it's time to add weight."
 };
 
 /* Returns everything the UI needs to describe "what should I do today?".
@@ -257,6 +257,7 @@ function progressionFor(exerciseId, planRow){
     const best = Math.max(...lastNormal.map(s=>s[key]||0));
     const step = metric==='time' ? (effort.mostlyEasy?15:10) : (effort.mostlyEasy?2:1);
     const target = effort.mostlyHard ? best : best+step;
+    status.targetValue = target;
     status.headline = metric==='time' ? `Try holding for ${target}s` : `Try for ${target} reps`;
     status.note = effort.mostlyHard ? 'That was tough — match it and hold your form.'
       : effort.mostlyEasy ? 'Felt easy — push for more this time.' : 'Good session — add a little.';
@@ -343,6 +344,347 @@ function applyTodaysLoadChoice(status, exerciseId, referenceWeight, assisted, re
     status.note = null;
   }
   return status;
+}
+
+/* --- live in-session coaching -----------------------------------------
+   Reacts to the set just logged today rather than repeating the
+   pre-session suggestion. Returns null before anything is logged, else
+   {key, tone, headlines, note, nextWeight, volume}. `headlines` are
+   wordings of one message (the card picks one); tone is good | adjust | neutral.
+   Checks run in priority order and the first match wins. `reopened` is
+   'bonus' or 'back' when a finished / left-behind card was opened by hand,
+   so the line looks ahead instead of repeating the last set's summary. */
+function liveSetFeedback(exerciseId, planRow, todaySets, status, reopened){
+  if(!todaySets.length) return null;
+  const ex = getExercise(exerciseId);
+  const metric = metricOf(ex);
+  const loadBased = hasLoadField(metric);
+  const assisted = metric==='assisted';
+  const repsMin = planRow.repsMin, repsMax = planRow.repsMax;
+  const targetSets = planRow.sets || 0;
+  const last = todaySets[todaySets.length-1];
+  const working = todaySets.filter(s=>!s.isWarmup && !s.isDropSet);
+  const history = recentSessions(exerciseId, 4, {before:todayKey()});
+  const lastSession = history[0] ? history[0].sets.filter(s=>!s.isWarmup && !s.isDropSet) : [];
+  const L = w=> loadLabel(w, metric);
+  const val = s=> metric==='time' ? (s.duration||0) : (s.reps||0);
+  const amount = n=> metric==='time' ? `${n}s` : `${n} rep${n===1?'':'s'}`;
+  const clock = s=> `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  const sameLoad = (a,b)=> !loadBased || Math.abs((a.weight||0)-(b.weight||0)) < 0.01;
+  const out = {key:'', tone:'good', headlines:[], note:null, nextWeight:null, volume:null};
+  const say = (key, tone, headlines, extra)=> Object.assign(out, {key, tone, headlines}, extra||{});
+
+  if(loadBased && !assisted && history[0]){
+    const sum = sets=> Math.round(sets.reduce((a,s)=>a+setVolumeLoad(s),0));
+    out.volume = {today:sum(todaySets), last:sum(history[0].sets)};
+  }
+
+  if(last.isWarmup){
+    const target = status.targetWeight!=null ? status.targetWeight
+      : status.state==='lower' ? status.lowerWeight : status.referenceWeight;
+    if(loadBased && target!=null && !working.length && !(metric==='weighted_bw' && target<=0)){
+      return say('warmup-target','neutral',[
+        `Warm-up in. Working sets at ${L(target)}.`,
+        `Primed. Load ${L(target)} for the real work.`,
+        `Good warm-up. Next up: ${L(target)}.`], {nextWeight:target});
+    }
+    return say('warmup','neutral',[
+      'Warm-up in. Now your first working set.',
+      'Primed. Time for a real set.',
+      "Warm-up logged. It won't count toward sets or PRs."]);
+  }
+
+  const n = working.length;
+  const allDone = targetSets>0 && n===targetSets;
+  const base = last.isDropSet && n ? working[n-1] : last;
+  const reps = base.reps||0, w = base.weight||0;
+  const step = assisted ? TRAINING.load.assistanceStepKg : loadStepFor(ex);
+  const lastText = setValueText(last, metric);
+  const prior = todaySets[todaySets.length-2];
+  const restSec = prior && last.ts && prior.ts ? Math.round((last.ts-prior.ts)/1000) : null;
+  const planRest = restSecondsFor(planRow);
+  const shortRest = restSec!=null && planRest>0 && restSec>=10 && restSec < planRest*0.6;
+  const longRest = restSec!=null && planRest>0 && restSec < 15*60 && restSec > Math.max(planRest*2, planRest+90);
+  const bump = (from, times)=>{
+    let x = from;
+    for(let i=0;i<times;i++) x = assisted ? Math.max(0, roundTo(x-step, 2)) : nextLoadFor(ex, x);
+    return x;
+  };
+
+  /* Same rep target and set count that sessionQualifiesForIncrease uses, so
+     "counts toward more weight" matches what the next session decides. */
+  const setsNeeded = Math.min(goalConfig().qualifyingSets, targetSets || goalConfig().qualifyingSets);
+  const nextNote = ()=>{
+    if(targetSets && n>=targetSets) return null;
+    const refNext = lastSession[n];
+    const lead = loadBased ? `Next: ${L(out.nextWeight!=null ? out.nextWeight : w)}` : 'Next set';
+    if(!loadBased){
+      if(status.targetValue!=null && val(base) < status.targetValue) return `${lead} · aim for ${amount(status.targetValue)}`;
+      if(refNext) return `${lead} · beat ${amount(val(refNext))} from last time`;
+      return `${lead} · match ${amount(val(base))}`;
+    }
+    if(out.nextWeight==null && status.repsTarget!=null && status.referenceWeight!=null){
+      const atTarget = working.filter(s=> sameLoad(s, {weight:w}) && (s.reps||0) >= status.repsTarget).length;
+      if(atTarget < setsNeeded) return `${lead} × ${status.repsTarget}+ · ${atTarget}/${setsNeeded} sets at target toward more weight`;
+    }
+    if(refNext && out.nextWeight==null && sameLoad(refNext, {weight:w})) return `${lead} · beat ${amount(val(refNext))} from last time`;
+    return `${lead} × ${repsMin}–${repsMax}`;
+  };
+  const doneNote = ()=>{
+    const total = working.reduce((a,s)=>a+val(s),0);
+    if(loadBased && status.repsTarget!=null && status.referenceWeight!=null){
+      const todayRef = mostCommonWeight(working, assisted);
+      const qualifies = sessionQualifiesForIncrease({sets:working}, todayRef, status.repsTarget, setsNeeded, assisted);
+      if(qualifies && Math.abs(todayRef - status.referenceWeight) < 0.01){
+        const have = status.qualifyingSessions + 1;
+        if(have >= status.sessionsRequired){
+          const next = assisted ? Math.max(0, roundToPlate(todayRef - TRAINING.load.assistanceStepKg)) : nextLoadFor(ex, todayRef);
+          return `Qualifying session ${have}/${status.sessionsRequired} — next time I'll offer ${L(next)}.`;
+        }
+        return `Qualifying session ${have}/${status.sessionsRequired} at ${L(todayRef)}. One step closer to more weight.`;
+      }
+      if(qualifies) return `First clean session at ${L(todayRef)}. Repeat it to earn the next jump.`;
+    }
+    if(lastSession.length){
+      const before = lastSession.slice(0, n).reduce((a,s)=>a+val(s),0);
+      const d = total - before;
+      return d>0 ? `+${amount(d)} vs last session.` : d===0 ? 'Same total as last session.' : `${amount(-d)} under last session.`;
+    }
+    return "First session banked. Next time I'll coach you against today.";
+  };
+  const tail = ()=> allDone ? doneNote() : nextNote();
+
+  if(reopened==='bonus' && working.length){
+    const higher = betterIsHigher(metric);
+    const top = working.reduce((a,s)=>{
+      const d = setPerformanceScore(s, metric) - setPerformanceScore(a, metric);
+      return (higher ? d>0 : d<0) ? s : a;
+    });
+    return say('reopen-bonus','good',[
+      `Bonus round: beat your best today, ${setValueText(top, metric)}.`,
+      `Extra set? Your number to beat is ${setValueText(top, metric)}.`],
+      {note:'Or finish with a drop set.'});
+  }
+  if(reopened==='back' && working.length){
+    const lastWork = working[working.length-1];
+    say('reopen-back','neutral',[
+      `Back on ${ex.name}: last set ${setValueText(lastWork, metric)}. Match it.`,
+      `Picking ${ex.name} back up. Last set was ${setValueText(lastWork, metric)}.`]);
+    out.note = nextNote();
+    return out;
+  }
+
+  if(last.isDropSet){
+    return say('drop','neutral',[
+      "Drop set done — that's the finisher.",
+      'Drop set in. Fully cooked.',
+      'Drop set logged. Nothing left in the tank.']);
+  }
+
+  const heavierThanLast = loadBased && status.referenceWeight!=null
+    && (assisted ? w < status.referenceWeight-0.01 : w > status.referenceWeight+0.01);
+  const grace = heavierThanLast ? TRAINING.load.newLoadRepGrace : 0;
+  if(loadBased && reps>0 && reps < repsMin - grace && !(metric==='weighted_bw' && w<=0)){
+    const lower = lowerLoadFor(ex, w, reps, repsMin, assisted);
+    const why = shortRest
+      ? `Only ${clock(restSec)} rest (plan ${clock(planRest)}) — that likely cost reps.`
+      : `${lastText} is below your ${repsMin}–${repsMax} range.`;
+    return say('lower','adjust', assisted
+      ? [`Add assistance: ${lower}${units()} for the next set.`, `${reps} reps is under range — go ${lower}${units()} assist.`]
+      : [`Drop to ${L(lower)} for the next set.`, `Too heavy for ${repsMin}–${repsMax}. Go ${L(lower)} next.`, `${reps} reps is under range — ${L(lower)} next set.`],
+      {nextWeight:lower, note:why});
+  }
+
+  if(last.isPR){
+    say('pr','good',[`New best: ${lastText} 🏆`, `PR — ${lastText}. That's real progress.`, `${lastText} beats everything you've logged.`]);
+    out.note = tail();
+    return out;
+  }
+
+  const prev = working[n-2] || null;
+  if(!history.length && loadBased && (!prev || !sameLoad(prev, last))){
+    const over = reps - repsMax;
+    if(over>0 || (reps>=repsMax && last.difficulty==='easy')){
+      // Aim the jump at mid-range using the same one-rep-max estimate as PRs.
+      const mid = Math.round((repsMin+repsMax)/2);
+      const bw = metric==='weighted_bw' ? bodyweightForScoring() : 0;
+      const ideal = Math.floor(((w+bw)*(1+reps/30)/(1+mid/30) - bw)/step + 1e-9) * step;
+      const up = assisted ? bump(w, over>=4 ? 2 : 1) : Math.max(bump(w, 1), roundTo(ideal, 2));
+      return say('feel-up','adjust',[`Too light — go ${L(up)} for set ${todaySets.length+1}.`, `${reps} reps is above ${repsMin}–${repsMax}. Try ${L(up)} next.`],
+        {nextWeight:up, note:`Aim for a weight you can do ${repsMin}–${repsMax} times.`});
+    }
+    if(last.difficulty==='easy'){
+      const up = bump(w, 1);
+      return say('feel-easy','good',[`Good start. Add a step: ${L(up)} for set ${todaySets.length+1}.`, `Easy and in range — nudge up to ${L(up)}.`],
+        {nextWeight:up, note:'Still easy next set? Keep climbing.'});
+    }
+    if(allDone){
+      say('feel-done','good',[`All ${targetSets} sets done. ${L(w)} is your working weight.`, `Done — and you found your number: ${L(w)}.`]);
+      out.note = doneNote();
+      return out;
+    }
+    if(last.difficulty==='hard'){
+      say('feel-hard','good',[`Right at your edge. Stay at ${L(w)}, keep form tight.`, `Hard but in range — ${L(w)} it is.`]);
+      out.note = tail();
+      return out;
+    }
+    say('feel-found','good',[`Found it — ${L(w)} is your working weight.`, `That's the one. Stay at ${L(w)}.`, `${L(w)} fits ${repsMin}–${repsMax}. Lock it in.`]);
+    out.note = tail();
+    return out;
+  }
+
+  // Load only goes up between sessions (see sessionQualifiesForIncrease), so no mid-session bump.
+  if(loadBased && reps > repsMax+2 && !(assisted && w<=0)){
+    say('over','good',[
+      `${reps} reps — well above ${repsMin}–${repsMax}. Sessions like this earn the jump.`,
+      `${reps} reps at ${L(w)}. Hold it — this is how the increase gets earned.`]);
+    out.note = tail();
+    return out;
+  }
+
+  if(prev && sameLoad(prev, last)){
+    const drop = val(prev) - val(last);
+    const seq = working.slice(-3).map(val).join(' → ');
+    if(metric==='time' ? drop>=10 : drop>=3){
+      if(shortRest){
+        say('fade-rest','adjust',[
+          `${val(prev)} → ${val(last)}: only ${clock(restSec)} rest. Take the full ${clock(planRest)}.`,
+          `Short rest (${clock(restSec)}) cost you ${amount(drop)}. Rest ${clock(planRest)} next.`]);
+        out.note = tail();
+        return out;
+      }
+      // Still in range, so the weight stays; the too-heavy check above handles real drops.
+      say('fade','adjust',[
+        `Reps falling fast (${seq}). Rest a little longer before the next one.`,
+        `${seq} — fatigue is building. Take an extra 30s, same weight.`]);
+      out.note = tail();
+      return out;
+    }
+    if(last.difficulty==='easy' && drop>=2){
+      say('mismatch','neutral',[`Marked easy, but down ${amount(drop)}. Was it really easy?`, `Down ${amount(drop)} on an "easy" set — be honest with the effort tag.`]);
+      out.note = tail();
+      return out;
+    }
+    if(n>=3){
+      const tri = working.slice(-3);
+      if(tri.every(s=>sameLoad(s, last))){
+        if(tri.every(s=>val(s)===val(last))){
+          const flat = tri.map(val).join(' · ');
+          say('steady','good',[`${flat} — rock solid.`, `${flat}. ${loadBased ? `${L(w)} is yours.` : 'Dead consistent.'}`]);
+          out.note = tail();
+          return out;
+        }
+        const e = tri.map(s=>EFFORT_SCORE[s.difficulty]||2);
+        if(e[0]<e[1] && e[1]<e[2]){
+          say('creep','neutral',['Easy → Medium → Hard. Getting heavy — keep form tight.', 'Effort is climbing every set. Stay crisp.']);
+          out.note = tail();
+          return out;
+        }
+      }
+    }
+  }
+
+  if(allDone){
+    const total = working.reduce((a,s)=>a+val(s),0);
+    const totalText = metric==='time' ? `${total}s held` : `${total} reps`;
+    return say('done','good',[`All ${targetSets} sets done — ${totalText} total.`, `Target hit: ${targetSets} sets, ${totalText}.`], {note:doneNote()});
+  }
+  if(targetSets && n>targetSets){
+    say('bonus','good',[`Bonus set — ${lastText}. Extra credit.`, `Past the plan: ${lastText}. Extra credit.`]);
+    out.note = doneNote();
+    return out;
+  }
+
+  const ref = lastSession[n-1] || lastSession[lastSession.length-1];
+  if(ref){
+    if(sameLoad(ref, last)){
+      const d = val(last) - val(ref);
+      if(d>0) say('beat','good',[`+${amount(d)} vs last time${loadBased ? ` at ${L(w)}` : ''}.`, `Beat last session: ${setValueText(ref, metric)} → ${lastText}.`]);
+      else if(d===0) say('match','good',[`Matched last session — ${lastText}.`, 'Same as last time. Now beat it.']);
+      else say('short','neutral',[`${amount(-d)} short of last time (${setValueText(ref, metric)}).`, `Down ${amount(-d)} on last session — shake it off.`]);
+      let note = null;
+      if(loadBased){
+        const bestAtW = Math.max(0, ...loggedSetsForExercise(exerciseId)
+          .filter(s=> s!==last && !s.isWarmup && !s.isDropSet && Math.abs((s.weight||0)-w) < 0.01)
+          .map(s=> s.reps||0));
+        if(bestAtW - reps === 1) note = `1 rep off your best at ${L(w)} (${bestAtW}).`;
+      }
+      if(!note && longRest && d>=0) note = `Long rest (${clock(restSec)}). Keep it nearer ${clock(planRest)} to stay warm.`;
+      out.note = note || tail();
+      return out;
+    }
+    const heavier = assisted ? w < (ref.weight||0) : w > (ref.weight||0);
+    say(heavier ? 'heavier' : 'lighter', heavier ? 'good' : 'neutral', heavier
+      ? [`${L(w)} — up from ${L(ref.weight||0)} last time.`, `Heavier than last session: ${reps} reps at ${L(w)}.`]
+      : [`Lighter than last time (${L(ref.weight||0)}). Make the reps count.`]);
+    out.note = tail();
+    return out;
+  }
+
+  if(prev){
+    const pn = todaySets.indexOf(prev) + 1;
+    if(sameLoad(prev, last)){
+      const d = val(last) - val(prev);
+      if(d>0) say('up-prev','good',[`+${amount(d)} on set ${pn}. Strong.`, `Better than set ${pn} — ${lastText}.`]);
+      else if(d===0) say('same-prev','good',[`Same as set ${pn} — consistent.`, `${lastText} again. Locked in.`]);
+      else say('down-prev','neutral',[`${amount(-d)} down on set ${pn} — normal fatigue.`, `Dipped ${amount(-d)}. Expected this deep in.`]);
+    } else {
+      const heavier = assisted ? w < (prev.weight||0) : w > (prev.weight||0);
+      say(heavier ? 'heavier-prev' : 'lighter-prev', 'good', heavier
+        ? [`Up to ${L(w)} and still ${reps} reps.`, `Heavier than set ${pn}: ${lastText}.`]
+        : [`Back to ${L(w)} — ${reps} clean reps.`]);
+    }
+    out.note = tail();
+    return out;
+  }
+
+  say('baseline','good',[`Baseline: ${lastText}. Match it next set.`, `${lastText} on the board. That's your number to beat.`]);
+  out.note = tail();
+  return out;
+}
+
+/* Builds a checker for the card steppers: given the draft, returns one short
+   line comparing it with the previous set, last session and the all-time best. */
+function makeStepperPreview(exerciseId, planRow, todaySets){
+  const ex = getExercise(exerciseId);
+  const metric = metricOf(ex);
+  const loadBased = hasLoadField(metric);
+  const assisted = metric==='assisted';
+  const higher = betterIsHigher(metric);
+  const working = todaySets.filter(s=>!s.isWarmup && !s.isDropSet);
+  const history = recentSessions(exerciseId, 1, {before:todayKey()});
+  const lastSession = history[0] ? history[0].sets.filter(s=>!s.isWarmup && !s.isDropSet) : [];
+  const prevToday = working[working.length-1] || null;
+  const lastRef = lastSession[working.length] || lastSession[lastSession.length-1] || null;
+  const prevLabel = prevToday ? `set ${todaySets.indexOf(prevToday)+1}` : '';
+  const weightRef = prevToday ? {set:prevToday, label:prevLabel} : lastRef ? {set:lastRef, label:'last time'} : null;
+  const scores = loggedSetsForExercise(exerciseId).filter(s=>!s.isWarmup && !s.isDropSet).map(s=> setPerformanceScore(s, metric));
+  const best = scores.length ? (higher ? Math.max(...scores) : Math.min(...scores)) : null;
+  const val = s=> metric==='time' ? (s.duration||0) : (s.reps||0);
+  const amount = n=> metric==='time' ? `${n}s` : `${n} rep${n===1?'':'s'}`;
+
+  return draft=>{
+    if(draft.warmup) return {text:"Warm-up: won't count toward sets or PRs.", tone:'neutral'};
+    const v = setValuesFrom(metric, draft);
+    if(!validSetValues(v)) return {text:'', tone:'neutral'};
+    const score = setPerformanceScore(v, metric);
+    if(best!=null && (higher ? score > best+1e-9 : score < best-1e-9)) return {text:`${setValueText(v, metric)} would be a new PR 🏆`, tone:'pr'};
+    if(!weightRef) return {text:'', tone:'neutral'};
+    const parts = [];
+    if(loadBased){
+      const dw = roundTo((v.weight||0) - (weightRef.set.weight||0), 2);
+      if(Math.abs(dw) >= 0.01) parts.push(`${dw>0?'+':'−'}${Math.abs(dw)}${units()}${assisted?' assist':''} vs ${weightRef.label}`);
+    }
+    const repsRef = [lastRef, prevToday].find(s=> s && (!loadBased || Math.abs((s.weight||0)-(v.weight||0)) < 0.01));
+    if(repsRef){
+      const label = repsRef===prevToday ? prevLabel : 'last time';
+      const dv = val(v) - val(repsRef);
+      parts.push(dv>0 ? `+${amount(dv)} vs ${label}` : dv===0 ? `ties ${label}` : `beat ${amount(val(repsRef))} (${label})`);
+    }
+    if(loadBased && v.reps < planRow.repsMin) parts.push(`below ${planRow.repsMin}–${planRow.repsMax}`);
+    else if(loadBased && v.reps > planRow.repsMax) parts.push(`above ${planRow.repsMin}–${planRow.repsMax}`);
+    return {text: parts.join(' · ') || `Same as ${weightRef.label}`, tone:'neutral'};
+  };
 }
 
 /* --- alternatives / variations ---------------------------------------

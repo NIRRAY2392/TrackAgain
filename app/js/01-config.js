@@ -1,5 +1,10 @@
 /* ============================ §1 CONFIG ============================ */
 const APP_NAME = "TrackA'gain";
+/* Stamped by the release script (trackagain-capacitor-project/trackagain/release.ps1); don't edit by hand. */
+const APP_VERSION = '1.4.0';
+const APP_BUILD = 5;
+const SITE_URL = 'https://nirray2392.github.io/TrackAgain/';
+const UPDATE_URL = SITE_URL + 'version.json';
 const STORAGE_KEY = 'liftlog_data_v2'; // legacy key — renaming would wipe saved workouts
 const THEME_KEY = 'trackagain_theme'; // appearance only — not part of workout JSON
 
@@ -49,8 +54,6 @@ const DAY_LABELS = {sun:'Sunday',mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:
 const EFFORT_LABELS = {easy:'Easy', med:'Medium', hard:'Hard'};
 const EFFORT_SCORE = {easy:1, med:2, hard:3};
 const METRIC_LABELS = { weight_reps:'Weight & reps', weighted_bw:'Bodyweight + added weight', reps_only:'Bodyweight reps', time:'Timed hold', assisted:'Assisted (lower is better)' };
-const HYPE_MESSAGES = ['Nice rep! 💪','Great work!','Getting stronger every session!',"That's the way!",
-  'Keep that momentum going!','Solid set!','Locked in 🔒','One step closer to your goal!','That looked strong!','Consistency wins — keep going!'];
 const MOTIVATIONAL_QUOTES = [
   "Strong is a skill. You practice it every time you show up.",
   "The rep that feels hardest is the one that counts most.",

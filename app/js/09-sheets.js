@@ -51,6 +51,7 @@ function logNormalSet(exerciseId, values, effort, isWarmup, intent){
   persistLog(log);
   const set = {id:uid(), exerciseId, difficulty:effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:!!isWarmup, ...values};
   log.sets.push(set);
+  promoteStartedExercise(log, exerciseId);
   markWorkoutActivity(log);
   recomputePRs(exerciseId);
   saveData(DATA);
@@ -183,10 +184,11 @@ function openLogSetSheet(opts){
       persistLog(log);
       const set = {id:uid(), exerciseId, difficulty:effort, intent:null, ts:Date.now(), isPR:false, isDropSet:true, stages:finalStages};
       log.sets.push(set);
+      promoteStartedExercise(log, exerciseId);
       markWorkoutActivity(log);
       saveData(DATA);
       closeSheets();
-      showToast('Drop set logged 🔻');
+      hapticTick(false);
       renderApp();
     }
   }
@@ -479,11 +481,11 @@ function openSupersetLogSheet(members){
           recomputePRs(block.row.exerciseId);
           return set;
         });
+        saved.forEach(s=> promoteStartedExercise(log, s.exerciseId));
         markWorkoutActivity(log);
         saveData(DATA);
         closeSheets();
-        if(saved.some(s=>s.isPR)) showToast('🏆 New personal record! You crushed it!', true);
-        else showToast('Superset round logged');
+        celebrateSets(saved);
         renderApp();
       };
     }
@@ -963,6 +965,7 @@ function openDayEditor(dayKey){
   function draw(){
     openSheet({
       title: DAY_LABELS[dayKey],
+      startFull: true,
       onRequestClose: guard,
       build:(body, sheet)=>{
         const liveWorkout = activeWorkoutLog();
@@ -1476,30 +1479,41 @@ function renderRecordsScreen(){
 }
 function renderRecordsMuscleScreen(muscle){
   const wrap = el(`<div></div>`);
+  const trained = exercisesWithPrs(muscle);
+  const summary = trained.length
+    ? `${trained.length} exercise${trained.length>1?'s':''} with PRs · tap one for its history`
+    : 'No PRs yet';
   const head = el(`
-    <div class="row between" style="margin-bottom:14px;align-items:flex-start;">
-      <div>
-        <button class="btn ghost" data-back style="padding:0 0 8px;margin-left:-4px;">← Muscles</button>
+    <div class="rec-head">
+      <button type="button" class="close-x" data-back aria-label="Back to all muscles">${icon('chevronLeft',20)}</button>
+      <div class="rec-head-text">
+        <div class="rec-kicker">Records</div>
         <h3>${escapeHtml(muscle)}</h3>
+        <div class="rec-sub">${escapeHtml(summary)}</div>
       </div>
     </div>`);
   q('[data-back]',head).onclick = ()=>{ recordsMuscle = null; renderApp(); };
   wrap.appendChild(head);
 
-  const trained = exercisesWithPrs(muscle);
-  const card = el(`<div class="card flat" style="padding:6px 14px;"></div>`);
+  const card = el(`<div class="card flat rec-list"></div>`);
   if(!trained.length){
     card.appendChild(el(`<p class="empty">No records yet for ${escapeHtml(muscle)}. Start training to see your PRs here.</p>`));
   } else {
     trained.forEach(ex=>{
       const moments = prMomentsForExercise(ex.id);
       const current = moments[moments.length-1];
+      const meta = `${prDayLabel(current.date)} · ${moments.length} PR${moments.length>1?'s':''}`;
       const row = el(`
-        <div class="ex-list-item">
-          <div>${escapeHtml(ex.name)}</div>
-          <span class="chip">${escapeHtml(formatPrValue(current.set, metricOf(ex)))}</span>
+        <div class="ex-list-item rec-row" role="button" tabindex="0">
+          <div class="rec-row-main">
+            <div class="rec-row-name">${escapeHtml(ex.name)}</div>
+            <div class="meta">${escapeHtml(meta)}</div>
+          </div>
+          <span class="chip rec-chip">${escapeHtml(formatPrValue(current.set, metricOf(ex)))}</span>
+          <span class="rec-go" aria-hidden="true">${icon('chevronRight',18)}</span>
         </div>`);
       row.onclick = ()=> openRecordsPrSheet(ex.id);
+      row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openRecordsPrSheet(ex.id); } };
       card.appendChild(row);
     });
   }
@@ -2164,15 +2178,32 @@ function renderBodyWeightCard(){
   const entries = sortedBodyWeight();
   const latest = entries[0] || null;
   const past = entries.slice(1);
+  const prev = past[0] || null;
+  let deltaHtml = '';
+  if(latest && prev){
+    const delta = roundTo(latest.weight - prev.weight, 1);
+    const pd = parseDateKey(prev.date);
+    const text = delta===0 ? 'No change' : `${delta>0?'+':'-'}${formatBodyWeightKg(Math.abs(delta))} kg`;
+    deltaHtml = `<div class="bw-change">
+        <span class="bw-delta">${escapeHtml(text)}</span>
+        <span class="bw-since">since ${pd.getDate()} ${BODY_WEIGHT_MONTHS[pd.getMonth()]}</span>
+      </div>`;
+  }
   const card = el(`
     <div class="card">
-      <div class="row between" style="margin-bottom:10px;">
+      <div class="row between" style="margin-bottom:6px;">
         <p class="section-title" style="margin:0;">Body weight</p>
-        <button class="btn" data-log style="padding:8px 12px;font-size:13px;">Log weight</button>
+        <button class="btn" data-log style="padding:6px 12px;font-size:13px;min-height:36px;">${icon('plus',15)} Log weight</button>
       </div>
       ${latest
-        ? `<div class="weight-current">Current: ${escapeHtml(formatBodyWeightKg(latest.weight))} <span class="unit">kg</span></div>
-           <p class="faint small" style="margin:4px 0 0;">${escapeHtml(formatBodyWeightDate(latest.date))}${latest.note?` · ${escapeHtml(latest.note)}`:''}</p>`
+        ? `<div class="bw-hero">
+             <div class="bw-main">
+               <div class="bw-label">Current</div>
+               <div class="bw-value">${escapeHtml(formatBodyWeightKg(latest.weight))}<span class="unit">kg</span></div>
+             </div>
+             ${deltaHtml}
+           </div>
+           <p class="faint small" style="margin:6px 0 0;">${escapeHtml(formatBodyWeightDate(latest.date))}${latest.note?` · ${escapeHtml(latest.note)}`:''}</p>`
         : `<p class="muted small" style="margin:0;">No weigh-ins yet. Log once a week on your weigh-in day.</p>`}
       <div data-past></div>
     </div>`);
@@ -2348,6 +2379,58 @@ function openTrainingGuideSheet(openKey){
   });
 }
 
+/* Settings → Check for updates. The website's version.json describes the
+   latest release; builds are compared, not version strings. */
+let updateCheckRunning = false;
+async function checkForUpdates(btn){
+  if(updateCheckRunning) return;
+  updateCheckRunning = true;
+  const label = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try{
+    const res = await fetch(`${UPDATE_URL}?t=${Date.now()}`, {cache:'no-store'});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const info = await res.json();
+    if(!info || typeof info.build!=='number' || !info.version) throw new Error('bad version.json');
+    if(info.build > APP_BUILD) openUpdateSheet(info);
+    else showToast(`You're on the latest version (v${APP_VERSION})`);
+  }catch(_){
+    showToast("Couldn't check for updates. Check your connection.");
+  }finally{
+    updateCheckRunning = false;
+    if(btn.isConnected){ btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+function openUpdateSheet(info){
+  const notesUrl = SITE_URL + (info.notes || 'downloads/');
+  const android = isAndroidApp();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(info.date||'')
+    ? parseDateKey(info.date).toLocaleDateString(undefined,{day:'numeric', month:'long', year:'numeric'}) : '';
+  const highlights = Array.isArray(info.highlights) ? info.highlights.filter(h=>typeof h==='string' && h.trim()) : [];
+  openSheet({
+    title:'Update available',
+    build:(body)=>{
+      body.appendChild(el(`
+        <div>
+          <div class="update-head">
+            <div class="update-ver">v${escapeHtml(info.version)}</div>
+            <div class="faint small">${date ? `${escapeHtml(date)} · ` : ''}you have v${escapeHtml(APP_VERSION)}</div>
+          </div>
+          ${highlights.length ? `<p class="small muted" style="margin:14px 0 6px;">What's new</p>
+            <ul class="update-list">${highlights.map(h=>`<li>${escapeHtml(h)}</li>`).join('')}</ul>` : ''}
+          ${android
+            ? `<a class="btn update-cta" href="${escapeHtml(notesUrl)}" target="_blank" rel="noopener noreferrer">${icon('download',18)} Download update</a>
+               <p class="faint small" style="margin:8px 2px 0;">Opens the download page. Installing over this version keeps all your workouts.</p>`
+            : `<button class="btn update-cta" data-reload>${icon('reopen',18)} Update now</button>`}
+          <a class="btn secondary update-cta" href="${escapeHtml(notesUrl)}" target="_blank" rel="noopener noreferrer" style="margin-top:10px;">Full release notes</a>
+        </div>`));
+      const reload = q('[data-reload]',body);
+      if(reload) reload.onclick = ()=> location.reload();
+    }
+  });
+}
+
 function renderSettingsScreen(){
   const wrap = el(`<div></div>`);
   wrap.appendChild(el(`<h3 style="margin-bottom:14px;">Settings</h3>`));
@@ -2360,8 +2443,18 @@ function renderSettingsScreen(){
         <div class="chip ${currentTheme()==='dark'?'on':''}" data-th="dark" style="flex:1;justify-content:center;">${icon('moon',16)} Dark</div>
         <div class="chip ${currentTheme()==='light'?'on':''}" data-th="light" style="flex:1;justify-content:center;">${icon('sun',16)} Light</div>
       </div>
+      ${isAndroidApp() ? `<label class="row" style="gap:8px;margin:14px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
+        <input type="checkbox" id="fullscreen" style="width:auto;" ${DATA.settings.fullscreen?'checked':''}>
+        <span>Full screen (hide status and navigation bars)</span>
+      </label>` : ''}
     </div>`);
   qa('[data-th]',themeCard).forEach(chip=> chip.onclick = ()=>{ setTheme(chip.dataset.th); renderApp(); });
+  const fullscreenBox = q('#fullscreen',themeCard);
+  if(fullscreenBox) fullscreenBox.onchange = (e)=>{
+    DATA.settings.fullscreen = e.target.checked;
+    saveData(DATA);
+    setFullscreen(DATA.settings.fullscreen);
+  };
   wrap.appendChild(themeCard);
 
   const nameCard = el(`
@@ -2566,12 +2659,27 @@ function renderSettingsScreen(){
     wrap.appendChild(card);
   }
 
+  wrap.appendChild(el(`<div class="section-title">App</div>`));
+  const appCard = el(`
+    <div class="card">
+      <div class="row between">
+        <div>
+          <div class="app-ver">Version ${escapeHtml(APP_VERSION)}</div>
+          <div class="faint small">Build ${APP_BUILD}</div>
+        </div>
+        <a class="btn ghost" href="${escapeHtml(SITE_URL)}downloads/" target="_blank" rel="noopener noreferrer" style="padding:8px 4px;">What's new</a>
+      </div>
+      <button class="btn secondary" data-update style="width:100%;margin-top:10px;">${icon('reopen',16)} Check for updates</button>
+    </div>`);
+  q('[data-update]',appCard).onclick = (e)=> checkForUpdates(e.currentTarget);
+  wrap.appendChild(appCard);
+
   wrap.appendChild(el(`
     <footer class="settings-footer">
       ${logoMarkHtml()}
       <div class="brand-kicker">${escapeHtml(APP_NAME)}</div>
       <div class="credit-line">Workout tracking, simplified by Nirbhay Raut.</div>
-      <div class="copy">©2026 <a class="credit-mail" href="mailto:trackagainsupport@gmail.com">trackagainsupport@gmail.com</a></div>
+      <div class="copy">v${escapeHtml(APP_VERSION)} · ©2026 <a class="credit-mail" href="mailto:trackagainsupport@gmail.com">trackagainsupport@gmail.com</a></div>
     </footer>`));
   wrap.appendChild(el(`
     <div class="chai-support">

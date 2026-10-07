@@ -207,7 +207,7 @@ function defaultSettings(){
   const goal = TRAINING.goals.hypertrophy;
   return { units:'kg', userName:DEFAULT_USER_NAME, goal:'hypertrophy',
     overload:{ repsToEarnIncrease:goal.repsToEarnIncrease, sessionsRequired:goal.sessionsRequired },
-    restDefaultMinutes:3, restNotify:true, restVibrate:true, restAutoStart:true, keepScreenOn:true,
+    restDefaultMinutes:3, restNotify:true, restVibrate:true, restAutoStart:true, keepScreenOn:true, fullscreen:true,
     restSetupAsked:false, restBatteryHintDismissed:false,
     weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], presetsVersion:0,
     defaultPlanSets:2, onboarded:false, gender:'unspecified', weightedBwMigrated:true };
@@ -257,6 +257,7 @@ function migrate(data){
   if(typeof s.restVibrate !== 'boolean') s.restVibrate = true;
   if(typeof s.restAutoStart !== 'boolean') s.restAutoStart = true;
   if(typeof s.keepScreenOn !== 'boolean') s.keepScreenOn = true;
+  if(typeof s.fullscreen !== 'boolean') s.fullscreen = true;
   if(typeof s.restSetupAsked !== 'boolean') s.restSetupAsked = false;
   if(typeof s.restBatteryHintDismissed !== 'boolean') s.restBatteryHintDismissed = false;
   if(!DAY_KEYS.includes(s.weighInDay)) s.weighInDay = 'mon';

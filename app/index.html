@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>TrackA'gain — Workout Tracker</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e1ff00'/%3E%3Cpath d='M8 19.5L16 10.5L24 19.5' stroke='%23000000' stroke-width='2.4' stroke-linecap='round' stroke-join='round' fill='none'/%3E%3Cpath d='M10 22.5H22' stroke='%23000000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <script>
-/* Apply stored theme before first paint. Default: dark. Key is separate from workout data. */
+/* Apply stored theme before first paint. Default: light. Key is separate from workout data. */
 (function(){
   try{
     var t = localStorage.getItem('trackagain_theme');
-    document.documentElement.setAttribute('data-theme', t==='light' ? 'light' : 'dark');
-  }catch(e){ document.documentElement.setAttribute('data-theme','dark'); }
+    document.documentElement.setAttribute('data-theme', t==='dark' ? 'dark' : 'light');
+  }catch(e){ document.documentElement.setAttribute('data-theme','light'); }
 })();
 </script>
 <script async src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
