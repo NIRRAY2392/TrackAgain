@@ -2939,18 +2939,8 @@ function renderSettingsScreen(){
         <div class="chip ${currentTheme()==='dark'?'on':''}" data-th="dark" style="flex:1;justify-content:center;">${icon('moon',16)} Dark</div>
         <div class="chip ${currentTheme()==='light'?'on':''}" data-th="light" style="flex:1;justify-content:center;">${icon('sun',16)} Light</div>
       </div>
-      ${isAndroidApp() ? `<label class="row" style="gap:8px;margin:14px 0 0;align-items:flex-start;font-size:13px;color:var(--text-dim);cursor:pointer;">
-        <input type="checkbox" id="fullscreen" style="width:auto;margin-top:2px;" ${DATA.settings.fullscreen?'checked':''}>
-        <span><strong style="color:var(--text);font-weight:700;">Full screen (Android app)</strong><br><span class="faint small" style="display:inline-block;margin-top:4px;line-height:1.4;">Fills the display and hides the status and navigation bars. Swipe from the edge to peek them briefly — they hide again. Only works in the installed APK.</span></span>
-      </label>` : ''}
     </div>`);
   qa('[data-th]',themeCard).forEach(chip=> chip.onclick = ()=>{ setTheme(chip.dataset.th); renderApp(); });
-  const fullscreenBox = q('#fullscreen',themeCard);
-  if(fullscreenBox) fullscreenBox.onchange = (e)=>{
-    DATA.settings.fullscreen = e.target.checked;
-    saveData(DATA);
-    setFullscreen(DATA.settings.fullscreen);
-  };
   wrap.appendChild(themeCard);
 
   const genderOpts = [['unspecified','Prefer not to say'],['male','Male'],['female','Female']];

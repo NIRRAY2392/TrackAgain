@@ -32,7 +32,7 @@ How this file works
 - Old tool warm-ups already saved on a day (like band curls) are replaced with the everyday bodyweight basics the next time the app opens.
 - **How to** sits at the top right of each warm-up.
 - **Weight jumps follow your gym.** Spotter and “ready for more weight” always move at least one full jump. Edit Weight jump per exercise on the Split day (or leave blank for the equipment default — machines/cables 5 kg, dumbbells/bars 2.5 kg).
-- Settings explains that Full screen only applies in the installed Android APK (not in a browser preview).
+- Full screen option is hidden in Settings for now; the Android app stays full screen by default.
 - **In-app pickers** for Settings, History range, and exercise details — no more stock Android dropdowns.
 - Toasts sit steadier and use the app’s card look instead of a harsh black pill.
 - **Rest alert sound.** In Settings → Rest timer, pick Phone default or Whistle for the rest-complete (and hold) notification.
@@ -46,7 +46,7 @@ How this file works
 - `liveSetFeedback()` now returns `progress` (`repsTarget`, `setsNeeded`, `atTarget`, `trackWeight`). `makeStepperPreview()` and `spotterChipActions()` drive the live Spotter line and chips in `liveCoachBox()`.
 - Split days store `warmups` (`id`, `title`, `detail`, `minutes`, `howTo`, optional `libraryId`). `basicWarmupsForDay()` seeds from `WARMUP_BASICS`. `DATA.warmupLibrary` seeded from `WARMUP_LIBRARY_SEED`. Workout logs snapshot `warmups` / `warmupDone`; not counted as sets. `resolveWarmupHowTo` drives the How to disclosure. Days that still list a tool warm-up are rewritten to `WARMUP_BASICS` on migrate.
 - `loadStepFor(ex, planRow)` resolves plan → exercise → equip. `snapLoad` / `suggestHeavierLoad` harden Spotter `nextWeight`. Machine/cable defaults are 5 kg. Plan rows store optional `loadStep`.
-- `MainActivity.applyFullscreen` uses edge-to-edge, transparent system bars, cutout short-edges, and re-hides bars after a transient swipe.
+- `MainActivity.applyFullscreen` uses edge-to-edge, transparent system bars, cutout short-edges, and re-hides bars after a transient swipe. Settings Full screen toggle is hidden; migrate forces `settings.fullscreen = true`.
 - `choiceFieldHtml` / `openChoiceSheet` / `bindChoiceField` replace native `<select>`. Toasts use `.toast-wrap` for position and `.toast` for opacity/slide only. Field input rules exclude checkbox/radio.
 - `formatRepRange(min, max)` collapses equal bounds to a single number for Spotter and plan target lines.
 - `settings.restSound` (`default` | `whistle`). Whistle channel `rest-heads-up-whistle-v1` uses `res/raw/whistle`; web preview plays `sounds/whistle.m4a`.
