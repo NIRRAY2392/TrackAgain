@@ -436,8 +436,6 @@ function migrate(data){
   if(typeof s.restVibrate !== 'boolean') s.restVibrate = true;
   if(typeof s.restAutoStart !== 'boolean') s.restAutoStart = true;
   if(typeof s.keepScreenOn !== 'boolean') s.keepScreenOn = true;
-  /* Full screen toggle is hidden for now; always keep immersive default. */
-  s.fullscreen = true;
   if(typeof s.restSetupAsked !== 'boolean') s.restSetupAsked = false;
   if(typeof s.restBatteryHintDismissed !== 'boolean') s.restBatteryHintDismissed = false;
   if(!DAY_KEYS.includes(s.weighInDay)) s.weighInDay = 'mon';

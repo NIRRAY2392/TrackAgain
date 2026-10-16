@@ -234,12 +234,6 @@ function setScreenAwake(on){
   const call = want ? plugin.keepAwake : plugin.allowSleep;
   if(typeof call==='function') Promise.resolve(call.call(plugin)).catch(()=>{ screenKeptAwake = !want; });
 }
-/* Android APK only: edge-to-edge immersive bars (Settings → Full screen). No-op in browser. */
-function setFullscreen(on){
-  const plugin = capPlugin('Fullscreen');
-  if(!plugin || typeof plugin.set!=='function') return;
-  Promise.resolve(plugin.set({enabled:!!on})).catch(()=>{});
-}
 function pushOverlayHistory(){
   overlayStack++;
   if(capacitorAppPlugin()) return;
