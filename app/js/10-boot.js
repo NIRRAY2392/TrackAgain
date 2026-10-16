@@ -8,11 +8,15 @@ try{ upgradePrFlags(); }
 catch(err){ console.error(APP_NAME+': PR re-rank failed', err); }
 setFullscreen(DATA.settings.fullscreen);
 renderApp();
+resumeHoldCountdown();
 
 document.addEventListener('visibilitychange', ()=>{
   if(document.hidden) pauseWorkoutForBackground();
-  else if(closeStaleWorkout() || maybeTrimAwayTime()) renderApp();
-  else syncWorkoutTimer();
+  else {
+    if(closeStaleWorkout() || maybeTrimAwayTime()) renderApp();
+    else syncWorkoutTimer();
+    resumeHoldCountdown();
+  }
 });
 window.addEventListener('pagehide', pauseWorkoutForBackground);
 
@@ -20,8 +24,11 @@ const capApp = capacitorAppPlugin();
 if(capApp && capApp.addListener){
   capApp.addListener('appStateChange', (state)=>{
     if(state && state.isActive===false) pauseWorkoutForBackground();
-    else if(closeStaleWorkout() || maybeTrimAwayTime()) renderApp();
-    else syncWorkoutTimer();
+    else {
+      if(closeStaleWorkout() || maybeTrimAwayTime()) renderApp();
+      else syncWorkoutTimer();
+      resumeHoldCountdown();
+    }
   });
   capApp.addListener('backButton', ()=>{
     if(closeTopOverlay()) return;

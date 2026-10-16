@@ -64,7 +64,8 @@ function todayLog(){
   let log = DATA.logs.find(l=>l.date===date);
   if(log) return log;
   return {id:uid(), date, dayKey:weekdayKey(), sets:[], active:false, completed:false,
-    startedAt:null, endedAt:null, elapsedMs:0, timerRunningSince:null, plan:null, planName:'', _transient:true};
+    startedAt:null, endedAt:null, elapsedMs:0, timerRunningSince:null, plan:null, planName:'',
+    warmups:null, warmupDone:[], _transient:true};
 }
 function persistLog(log){
   if(!log || !log._transient) return log;
@@ -72,22 +73,33 @@ function persistLog(log){
   if(!DATA.logs.some(l=>l.id===log.id)) DATA.logs.push(log);
   return log;
 }
-function routineForLog(log){ return splitDays()[log.dayKey] || {name:'Rest', exercises:[]}; }
+function routineForLog(log){ return splitDays()[log.dayKey] || {name:'Rest', exercises:[], warmups:[]}; }
 function planForLog(log){ return Array.isArray(log.plan) ? log.plan : routineForLog(log).exercises; }
 function planNameForLog(log){ return log.planName || routineForLog(log).name || 'Workout'; }
+function warmupsForLog(log){
+  if(Array.isArray(log.warmups)) return log.warmups;
+  return routineForLog(log).warmups || [];
+}
 function ensurePlanSnapshot(log){
   persistLog(log);
+  const routine = routineForLog(log);
+  let dirty = false;
   if(!Array.isArray(log.plan)){
-    const routine = routineForLog(log);
     log.plan = clone(routine.exercises || []);
     log.plan.forEach(row=>{ row.sessionOnly = false; });
     log.planName = routine.name || 'Workout';
-    saveData(DATA);
+    dirty = true;
   }
+  if(!Array.isArray(log.warmups)){
+    log.warmups = clone(routine.warmups || []);
+    dirty = true;
+  }
+  if(!Array.isArray(log.warmupDone)){ log.warmupDone = []; dirty = true; }
+  if(dirty) saveData(DATA);
   return log.plan;
 }
 function splitDayFor(dayKey){
-  return splitDays()[dayKey] || {name:'Rest', exercises:[]};
+  return splitDays()[dayKey] || {name:'Rest', exercises:[], warmups:[]};
 }
 function exerciseInSplit(dayKey, exerciseId){
   return (splitDayFor(dayKey).exercises || []).some(r=>r.exerciseId===exerciseId);
@@ -133,7 +145,7 @@ function syncActiveWorkoutFromSplit(opts){
   const dayKey = log.dayKey || weekdayKey();
   if(opts.dayKey && opts.dayKey!==dayKey) return false;
   if(!Array.isArray(log.hiddenExerciseIds)) log.hiddenExerciseIds = [];
-  const routine = splitDays()[dayKey] || {name:'Rest', exercises:[]};
+  const routine = splitDays()[dayKey] || {name:'Rest', exercises:[], warmups:[]};
   const incoming = routine.exercises || [];
   const incomingIds = new Set(incoming.map(r=>r.exerciseId));
   if(opts.replaceAll) log.hiddenExerciseIds = [];
@@ -146,6 +158,9 @@ function syncActiveWorkoutFromSplit(opts){
   );
   log.plan = fresh.concat(extras);
   log.planName = routine.name || 'Workout';
+  log.warmups = clone(routine.warmups || []);
+  const wuIds = new Set(log.warmups.map(w=>w && w.id).filter(Boolean));
+  log.warmupDone = (Array.isArray(log.warmupDone) ? log.warmupDone : []).filter(id=> wuIds.has(id));
   return true;
 }
 function commitExerciseToSplit(log, exerciseId){

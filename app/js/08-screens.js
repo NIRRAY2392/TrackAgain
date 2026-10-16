@@ -261,6 +261,7 @@ function closeStaleWorkout(){
   if(homeScreen==='workout') homeScreen = 'landing';
   stopRestTimer(WORKOUT_REST_ID);
   cancelAllRestNotifications();
+  clearWorkoutHolds(log);
   clearWorkoutTicker();
   setScreenAwake(false);
   saveData(DATA);
@@ -273,7 +274,11 @@ function startWorkout(){
   const log = persistLog(todayLog());
   // Copy the split as it is now. A plan left over from before Start
   // would ignore split edits made while no workout was running.
-  if(!log.startedAt) log.plan = null;
+  if(!log.startedAt){
+    log.plan = null;
+    log.warmups = null;
+    log.warmupDone = [];
+  }
   absorbQueuedExercises(log);
   log.active = true;
   if(!log.startedAt) log.startedAt = Date.now();
@@ -303,6 +308,7 @@ function finishWorkout(){
   confirmAction("Finish and save today's workout?", 'Finish', ()=>{
     stopRestTimer(WORKOUT_REST_ID);
     cancelAllRestNotifications();
+    clearWorkoutHolds(log);
     stopWorkoutClock(log);
     log.endedAt = Date.now(); log.active = false; log.completed = true;
     homeScreen = 'landing';
@@ -379,13 +385,14 @@ function renderLanding(){
       n++;
       const ex = getExercise(row.exerciseId);
       const done = setsInLogFor(log,row.exerciseId).length>0;
-      const range = row.repsMin===row.repsMax ? `${row.repsMin}` : `${row.repsMin}–${row.repsMax}`;
-      const unit = metricOf(ex)==='time' ? 's' : '';
+      const range = formatRepRange(row.repsMin, row.repsMax);
+      const target = isMinuteHold(ex) ? `${row.sets} × ${formatHoldRange(row.repsMin, row.repsMax)}`
+        : `${row.sets} × ${range}${metricOf(ex)==='time' ? 's' : ''}`;
       return `
         <div class="hl-row${done?' done':''}">
           <span class="hl-idx">${done ? icon('check',14) : n}</span>
           <span class="hl-name">${escapeHtml(ex ? ex.name : '?')}${inSuperset ? `<span class="hl-link" title="Superset" aria-label="Superset">${icon('link',13)}</span>` : ''}</span>
-          <span class="hl-target">${row.sets} × ${range}${unit}</span>
+          <span class="hl-target">${target}</span>
         </div>`;
     };
     const rows = groupPlanRows(plan).map(g=> g.type==='single'
@@ -421,23 +428,35 @@ function renderLanding(){
   return wrap;
 }
 
-/* One bar for both clocks, shown in the fixed header. Training: the workout
-   clock. Resting: only the rest countdown, and the bar fills as rest runs;
-   the workout clock keeps counting and comes back when rest ends. */
+/* One bar for the clocks in the fixed header. Training: the workout clock.
+   A plank or treadmill countdown replaces it while that hold is running.
+   Resting: only the rest countdown. The workout clock keeps counting
+   underneath and comes back when the hold or rest ends. */
 function workoutTimerBarEl(log){
   const restId = WORKOUT_REST_ID;
-  const resting = !!restTimers[restId];
+  const hold = findActiveHold(log);
+  const resting = !hold && !!restTimers[restId];
   const startedAt = log.startedAt ? new Date(log.startedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}) : '';
   const clock = formatWorkoutClock(workoutElapsedMs(log));
+  const holdText = hold ? holdRemainingText(hold) : '';
+  const holdName = hold ? ((getExercise(hold.exerciseId)||{}).name || 'Hold') : '';
   const left = resting ? restRemainingText(restId) : '';
-  const center = resting
+  const center = hold
+    ? `<span class="session-clock slot-clock" data-holdcountdown="${hold.id}" data-shape="${slotShape(holdText)}" role="timer" aria-label="${escapeHtml(holdText)}">${slotClockHtml(holdText, true)}</span>
+       <span class="tb-sub"><b>${escapeHtml(holdName)}</b></span>`
+    : resting
     ? `<span class="session-clock slot-clock" data-restcountdown="${restId}" data-shape="${slotShape(left)}" role="timer" aria-label="${left}">${slotClockHtml(left, true)}</span>
        <span class="tb-sub"><b>Resting</b></span>`
     : `<span class="session-clock slot-clock" data-workout-timer data-shape="${slotShape(clock)}" role="timer" aria-label="${clock}">${slotClockHtml(clock)}</span>
        <span class="tb-sub">In progress${startedAt ? ' · '+startedAt : ''}</span>`;
+  const fill = hold
+    ? `<div class="tb-fill-wrap"><div class="tb-fill" data-holdfill="${hold.id}" style="width:${holdProgressPct(hold)}%"></div></div>`
+    : resting
+    ? `<div class="tb-fill-wrap"><div class="tb-fill" data-restfill="${restId}" style="width:${restProgressPct(restId)}%"></div></div>`
+    : '';
   const bar = el(`
-    <div class="session-bar timer-bar${resting?' resting':''}" data-pin-head>
-      ${resting ? `<div class="tb-fill-wrap"><div class="tb-fill" data-restfill="${restId}" style="width:${restProgressPct(restId)}%"></div></div>` : ''}
+    <div class="session-bar timer-bar${hold?' holding':''}${resting?' resting':''}" data-pin-head>
+      ${fill}
       <div class="tb-top">
         <button type="button" class="btn ghost" data-back aria-label="Back to home" style="padding:8px 10px;">${icon('chevronLeft',18)} Back</button>
         <span class="lbl">${center}</span>
@@ -446,9 +465,12 @@ function workoutTimerBarEl(log){
     </div>`);
   q('[data-back]',bar).onclick = backToLanding;
   q('[data-finish]',bar).onclick = finishWorkout;
-  const lastRow = lastLoggedPlanRow(log);
-  const lastEx = lastRow && getExercise(lastRow.exerciseId);
-  bar.appendChild(restControlsEl(restId, lastRow, lastEx ? lastEx.name : ''));
+  if(hold) bar.appendChild(holdControlsEl());
+  else {
+    const lastRow = lastLoggedPlanRow(log);
+    const lastEx = lastRow && getExercise(lastRow.exerciseId);
+    bar.appendChild(restControlsEl(restId, lastRow, lastEx ? lastEx.name : ''));
+  }
   return bar;
 }
 /* Rest start/extend/skip/expiry only change the timer bar. Swapping just the
@@ -504,6 +526,70 @@ function autoStartRest(rows, name){
   const seconds = Math.max(...rows.map(r=> restSecondsFor(r)));
   if(seconds>0) startRestTimer(WORKOUT_REST_ID, seconds, name);
 }
+/* After a plank or treadmill countdown ends or is stopped, rest uses the
+   same rules as logging a set: only the last exercise of a superset rests,
+   and nothing starts once every exercise has hit its target. */
+function restAfterHold(set){
+  const log = activeWorkoutLog();
+  if(!log || !set) return;
+  const plan = planForLog(log);
+  const row = plan.find(r=> r.exerciseId===set.exerciseId);
+  if(!row) return;
+  const group = row.supersetId ? plan.filter(r=> r.supersetId===row.supersetId) : [row];
+  if(group[group.length-1].exerciseId!==set.exerciseId) return;
+  const ex = getExercise(set.exerciseId);
+  autoStartRest(group, ex ? ex.name : '');
+}
+
+function workoutWarmupCard(log){
+  const warmups = warmupsForLog(log);
+  if(!warmups.length) return null;
+  if(!Array.isArray(log.warmupDone)) log.warmupDone = [];
+  const done = new Set(log.warmupDone);
+  const mins = warmupsMinutes(warmups);
+  const doneN = warmups.filter(w=> done.has(w.id)).length;
+  const card = el(`
+    <div class="card wu-workout-card">
+      <div class="wu-workout-head">
+        <p class="section-title" style="margin:0;">Warm-up</p>
+        <span class="wu-workout-meta">${doneN}/${warmups.length}${mins?` · ~${mins} min`:''}</span>
+      </div>
+      <p class="faint small" style="margin:4px 0 8px;">Do these before your working sets. Tap to check off.</p>
+      <div class="wu-workout-rows">
+        ${warmups.map(w=>{
+          const on = done.has(w.id);
+          const dose = [w.detail, w.minutes?`~${w.minutes} min`:''].filter(Boolean).join(' · ');
+          const howTo = resolveWarmupHowTo(w);
+          return `<div class="wu-workout-row wu-howto-scope${on?' done':''}">
+            <div class="wu-row-top">
+              <button type="button" class="wu-workout-main" data-wu-id="${escapeHtml(w.id)}">
+                <span class="wu-check" aria-hidden="true">${on ? icon('check',14) : ''}</span>
+                <span class="wu-copy">
+                  <span class="wu-title">${escapeHtml(w.title||'Warm-up')}</span>
+                  ${dose ? `<span class="wu-dose">${escapeHtml(dose)}</span>` : ''}
+                </span>
+              </button>
+              ${howTo ? warmupHowToButtonHtml() : ''}
+            </div>
+            ${warmupHowToBodyHtml(howTo)}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`);
+  qa('[data-wu-id]',card).forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.dataset.wuId;
+      const i = log.warmupDone.indexOf(id);
+      if(i>=0) log.warmupDone.splice(i,1);
+      else log.warmupDone.push(id);
+      persistLog(log);
+      saveData(DATA);
+      renderApp();
+    };
+  });
+  bindWarmupHowTo(card);
+  return card;
+}
 
 function renderActiveWorkout(){
   const wrap = el(`<div></div>`);
@@ -511,6 +597,9 @@ function renderActiveWorkout(){
   const plan = ensurePlanSnapshot(log);
 
   wrap.appendChild(workoutTimerBarEl(log));
+
+  const wuCard = workoutWarmupCard(log);
+  if(wuCard) wrap.appendChild(wuCard);
 
   if(!plan.length){
     wrap.appendChild(el(`
@@ -633,15 +722,23 @@ const expandedCards = new Set();
 /* Cards opened with "Start exercise" before their first set. Untouched cards hide the logger. */
 const startedCards = new Set();
 
+function defaultHoldSeconds(sample, planRow, minute){
+  if(sample && sample.duration) return sample.duration;
+  if(!minute) return 30;
+  const plan = planRow && planRow.repsMin;
+  if(plan && plan>=60) return plan;
+  return 60;
+}
 /* Values in the card's inline logger. They carry over between sets and
    follow the planned load when the overload suggestion is accepted. */
 function setDraftFor(key, planRow, sample, plannedWeight){
   let d = setDrafts.get(key);
   if(!d){
+    const minute = isMinuteHold(getExercise(planRow.exerciseId));
     d = {
       weight: sample && sample.weight!=null ? sample.weight : 0,
       reps: sample && sample.reps ? sample.reps : (planRow.repsMin || 8),
-      duration: sample && sample.duration ? sample.duration : 30,
+      duration: defaultHoldSeconds(sample, planRow, minute),
       effort: (sample && sample.difficulty) || 'med',
       warmup: false,
     };
@@ -652,11 +749,11 @@ function setDraftFor(key, planRow, sample, plannedWeight){
   return d;
 }
 
-function stepperHtml(field, value, unit, label){
+function stepperHtml(field, value, unit, label, decimal){
   return `
     <div class="stp" data-field="${field}">
       <button type="button" class="stp-btn" data-dec aria-label="Less ${label}">${icon('minus',16)}</button>
-      <label class="stp-val"><input type="number" inputmode="${field==='weight'?'decimal':'numeric'}" value="${value}" aria-label="${label}"><span>${unit}</span></label>
+      <label class="stp-val"><input type="number" inputmode="${decimal||field==='weight'?'decimal':'numeric'}" value="${value}" aria-label="${label}"><span>${unit}</span></label>
       <button type="button" class="stp-btn" data-inc aria-label="More ${label}">${icon('plus',16)}</button>
     </div>`;
 }
@@ -670,7 +767,7 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
     if(!set.isWarmup) working++;
     const bonus = !set.isWarmup && working > targetSets;
     const mainStage = set.isDropSet ? 0 : null;
-    const mainVal = set.isDropSet ? setValueText({...set.stages[0]}, metric) : setValueText(set, metric);
+    const mainVal = set.isDropSet ? setValueText({...set.stages[0], exerciseId:set.exerciseId}, metric) : setValueText(set, metric);
     let html = `
       <div class="ts-row${bonus?' bonus':''}${set.isWarmup?' warmup':''}${isEditing(set, mainStage)?' editing':''}" data-edit-set="${set.id}" data-stage="${mainStage==null?'':mainStage}" role="button" tabindex="0" aria-label="Edit set ${i+1}">
         <span class="ts-num">${i+1}</span>
@@ -682,7 +779,7 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
       html += `
         <div class="ts-row ts-sub${isEditing(set, k+1)?' editing':''}" data-edit-set="${set.id}" data-stage="${k+1}" role="button" tabindex="0" aria-label="Edit drop ${k+1} of set ${i+1}">
           <span class="ts-branch" aria-hidden="true"></span>
-          <span class="ts-val">${escapeHtml(setValueText({...stage}, metric))}</span>
+          <span class="ts-val">${escapeHtml(setValueText({...stage, exerciseId:set.exerciseId}, metric))}</span>
           <span class="ts-feel">Drop ${k+1}</span>
           <button type="button" class="ts-del" data-del-set="${set.id}" data-stage="${k+1}" aria-label="Delete drop ${k+1}">${icon('x',15)}</button>
         </div>`;
@@ -707,7 +804,10 @@ function workoutExerciseCard(planRow, index, log, opts){
     : `Bonus set${working.length-planRow.sets>1?'s':''} — you went further`;
   const progressCls = working.length > planRow.sets ? 'hit-bonus-msg'
     : working.length >= planRow.sets ? 'hit-done-msg' : 'hit-progress-msg';
-  const targetLine = `${planRow.sets} sets${metric!=='time' ? ` · ${planRow.repsMin}–${planRow.repsMax} reps` : ''}${planRow.rpe?` · RPE ${planRow.rpe}`:''}`;
+  const minuteHold = isMinuteHold(ex);
+  const targetLine = minuteHold
+    ? `${planRow.sets} set${planRow.sets===1?'':'s'} · ${formatHoldRange(planRow.repsMin, planRow.repsMax)}${planRow.rpe?` · RPE ${planRow.rpe}`:''}`
+    : `${planRow.sets} set${planRow.sets===1?'':'s'}${metric!=='time' ? ` · ${formatRepRange(planRow.repsMin, planRow.repsMax)} reps` : ''}${planRow.rpe?` · RPE ${planRow.rpe}`:''}`;
   const lastBits = lastLoggedBits(planRow.exerciseId);
   const lastToday = doneSets.filter(s=>!s.isDropSet).slice(-1)[0];
   const sample = lastToday || (lastBits && lastBits.set);
@@ -755,11 +855,15 @@ function workoutExerciseCard(planRow, index, log, opts){
       ${todaySetRowsHtml(doneSets, metric, planRow.sets, showAll, editing)}
     </div>` : '';
 
-  const wStep = metric==='assisted' ? TRAINING.load.assistanceStepKg : loadStepFor(ex);
+  const wStep = loadStepFor(ex, planRow);
   const weightUnit = metric==='assisted' ? 'kg assist' : metric==='weighted_bw' ? 'kg added'
     : equipOf(ex)==='dumbbell' ? `${units()} each` : units();
   const weightName = metric==='assisted' ? 'assistance' : metric==='weighted_bw' ? 'added weight' : 'weight';
-  const steppers = metric==='time' ? stepperHtml('duration', draft.duration, 'sec', 'seconds')
+  const hold = minuteHold ? holdParts(draft.duration) : null;
+  const steppers = metric==='time'
+    ? (minuteHold
+      ? stepperHtml('holdMin', hold.min, 'min', 'minutes') + stepperHtml('holdSec', hold.sec, 'sec', 'seconds')
+      : stepperHtml('duration', draft.duration, 'sec', 'seconds'))
     : metric==='reps_only' ? stepperHtml('reps', draft.reps, 'reps', 'reps')
     : stepperHtml('weight', draft.weight, weightUnit, weightName)
       + stepperHtml('reps', draft.reps, 'reps', 'reps');
@@ -772,8 +876,8 @@ function workoutExerciseCard(planRow, index, log, opts){
           : `<span class="ns-title">Set ${doneSets.length+1}${refText ? `<span class="ns-ref"> · ${escapeHtml(refText)}</span>` : ''}</span>`}
         ${showWarmup ? `<label class="ns-wu"><input type="checkbox" data-wu ${draft.warmup?'checked':''}><span>Warm-up</span></label>` : ''}
       </div>
-      <div class="ns-steps${metric==='time'||metric==='reps_only'?' single':''}">${steppers}</div>
-      ${editing ? '' : '<div class="ns-preview" data-preview aria-live="polite"></div>'}
+      <div class="ns-steps${(!minuteHold && metric==='time')||metric==='reps_only'?' single':''}">${steppers}</div>
+      ${editing || showCoach ? '' : '<div class="ns-preview" data-preview aria-live="polite"></div>'}
       <div class="seg" role="radiogroup" aria-label="How hard did it feel">
         ${['easy','med','hard'].map(k=>`<button type="button" role="radio" data-eff="${k}" aria-checked="${draft.effort===k}" class="${draft.effort===k?'on':''}">${effortLabel(k)}</button>`).join('')}
       </div>
@@ -825,7 +929,9 @@ function workoutExerciseCard(planRow, index, log, opts){
     scrollCardIntoView(planRow.exerciseId);
   };
   if(!collapsed && (readyPrompt || !showCoach)) q('[data-progression]',card).appendChild(progressionBlock(status, planRow));
-  if(showCoach) q('[data-progression]',card).appendChild(liveCoachBox(feedback, {listKey, draft, metric, latest, fresh, exerciseId:planRow.exerciseId}));
+  if(showCoach) q('[data-progression]',card).appendChild(liveCoachBox(feedback, {
+    listKey, draft, metric, latest, fresh, exerciseId:planRow.exerciseId, planRow, status, todaySets:doneSets
+  }));
 
   qa('[data-toggle-sets]',card).forEach(node=> node.onclick = ()=>{
     if(showAll) openSetLists.delete(listKey); else openSetLists.add(listKey);
@@ -872,7 +978,9 @@ function workoutExerciseCard(planRow, index, log, opts){
     if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
     updateLoggedSet(editSet, editing.stage, values, draft.effort, draft.warmup, null);
     endEdit();
-    showToast('Set updated');
+    const holdFinished = typeof editSet.holdStartedAt==='number' && holdRemainingMs(editSet)<=0;
+    syncHoldToDuration(editSet);
+    if(!holdFinished) showToast('Set updated');
     renderApp();
   };
 
@@ -888,26 +996,134 @@ function workoutExerciseCard(planRow, index, log, opts){
   };
 
   const previewEl = q('[data-preview]',card);
-  const preview = previewEl ? makeStepperPreview(planRow.exerciseId, planRow, doneSets) : null;
+  const liveEl = q('[data-live-spotter]',card);
+  const preview = (previewEl || liveEl) ? makeStepperPreview(planRow.exerciseId, planRow, doneSets, status) : null;
   const paintPreview = ()=>{
     if(!preview) return;
     const p = preview(draft);
-    previewEl.textContent = p.text;
-    previewEl.classList.toggle('is-pr', p.tone==='pr');
+    if(liveEl){
+      const next = p.text || '';
+      if(liveEl.textContent !== next){
+        liveEl.textContent = next;
+        liveEl.classList.remove('spot-live-tick');
+        void liveEl.offsetWidth;
+        liveEl.classList.add('spot-live-tick');
+      }
+      liveEl.classList.toggle('is-pr', p.tone==='pr');
+    }
+    if(previewEl){
+      previewEl.textContent = p.text;
+      previewEl.classList.toggle('is-pr', p.tone==='pr');
+    }
+  };
+  const syncSteppersFromDraft = ()=>{
+    qa('.stp',card).forEach(stp=>{
+      const field = stp.dataset.field;
+      const input = q('input',stp);
+      if(!input) return;
+      if(field==='holdMin' || field==='holdSec'){
+        const parts = holdParts(draft.duration||0);
+        input.value = field==='holdMin' ? parts.min : parts.sec;
+      } else if(field==='weight') input.value = draft.weight;
+      else if(field==='reps') input.value = draft.reps;
+      else if(field==='duration') input.value = draft.duration;
+      input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch';
+    });
+    paintPreview();
   };
   paintPreview();
 
-  const steps = {weight:{step:wStep, min:0, dp:2}, reps:{step:1, min:1, dp:0}, duration:{step:5, min:5, dp:0}};
+  const coachBox = q('.coach-box',card);
+  if(coachBox && coachBox._spotChips){
+    qa('[data-chip]',coachBox).forEach(btn=>{
+      const chip = coachBox._spotChips.find(c=>c.key===btn.dataset.chip);
+      if(!chip) return;
+      btn.onclick = ()=>{
+        chip.apply(draft);
+        hapticTick(false);
+        syncSteppersFromDraft();
+      };
+    });
+  }
+
+  const steps = {
+    weight:{step:wStep, min:0, dp:2},
+    reps:{step:1, min:1, dp:0},
+    duration:{step:5, min:5, dp:0},
+    holdMin:{step:1, min:0, dp:0, hold:'min'},
+    holdSec:{step:1, min:0, max:59, dp:0, hold:'sec'},
+  };
+  const paintHoldSteppers = ()=>{
+    const parts = holdParts(draft.duration||0);
+    qa('.stp',card).forEach(stp=>{
+      if(stp.dataset.field!=='holdMin' && stp.dataset.field!=='holdSec') return;
+      const input = q('input',stp);
+      input.value = stp.dataset.field==='holdMin' ? parts.min : parts.sec;
+      input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch';
+    });
+    paintPreview();
+  };
+  const applyHold = (min, sec)=>{
+    let m = Math.max(0, Math.round(Number(min)||0));
+    let s = Math.round(Number(sec)||0);
+    if(isNaN(s) || s<0) s = 0;
+    while(s>=60){ m += 1; s -= 60; }
+    draft.duration = Math.max(0, m*60 + s);
+    paintHoldSteppers();
+  };
   qa('.stp',card).forEach(stp=>{
     const field = stp.dataset.field, cfg = steps[field];
+    if(!cfg) return;
     const input = q('input',stp);
     const fit = ()=>{ input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch'; };
-    const set = v=>{ draft[field] = Math.max(cfg.min, roundTo(v, cfg.dp)); input.value = draft[field]; fit(); paintPreview(); };
+    if(cfg.hold){
+      const bump = (delta)=>{
+        const parts = holdParts(draft.duration||0);
+        if(cfg.hold==='min') applyHold(parts.min + delta, parts.sec);
+        else {
+          let next = parts.sec + delta;
+          let mins = parts.min;
+          if(next>59){ mins += 1; next = 0; }
+          else if(next<0){
+            if(mins>0){ mins -= 1; next = 59; }
+            else next = 0;
+          }
+          applyHold(mins, next);
+        }
+      };
+      fit();
+      q('[data-dec]',stp).onclick = ()=> bump(-cfg.step);
+      q('[data-inc]',stp).onclick = ()=> bump(cfg.step);
+      input.oninput = ()=>{
+        const parts = holdParts(draft.duration||0);
+        if(cfg.hold==='min') applyHold(input.value, parts.sec);
+        else applyHold(parts.min, input.value);
+      };
+      input.onchange = ()=>{
+        const parts = holdParts(draft.duration||0);
+        if(cfg.hold==='min') applyHold(input.value, parts.sec);
+        else applyHold(parts.min, Math.min(59, Math.max(0, parseInt(input.value,10)||0)));
+      };
+      return;
+    }
+    const commit = (shown, clamp)=>{
+      let n = roundTo(parseFloat(shown), cfg.dp);
+      if(isNaN(n) || n<=0) n = cfg.min;
+      else if(clamp) n = Math.max(cfg.min, n);
+      draft[field] = n;
+      input.value = draft[field];
+      fit(); paintPreview();
+    };
     fit();
-    q('[data-dec]',stp).onclick = ()=> set((parseFloat(input.value)||0) - cfg.step);
-    q('[data-inc]',stp).onclick = ()=> set((parseFloat(input.value)||0) + cfg.step);
-    input.oninput = ()=>{ const v = parseFloat(input.value); if(!isNaN(v)) draft[field] = v; fit(); paintPreview(); };
-    input.onchange = ()=> set(parseFloat(input.value)||cfg.min);
+    q('[data-dec]',stp).onclick = ()=> commit((parseFloat(input.value)||0) - cfg.step, true);
+    q('[data-inc]',stp).onclick = ()=> commit((parseFloat(input.value)||0) + cfg.step, true);
+    input.oninput = ()=>{
+      const v = parseFloat(input.value);
+      if(isNaN(v)) return;
+      draft[field] = v;
+      fit(); paintPreview();
+    };
+    input.onchange = ()=> commit(input.value, false);
   });
   qa('[data-eff]',card).forEach(btn=> btn.onclick = ()=>{
     draft.effort = btn.dataset.eff;
@@ -924,9 +1140,11 @@ function workoutExerciseCard(planRow, index, log, opts){
     const set = logNormalSet(planRow.exerciseId, values, draft.effort, draft.warmup, null);
     draft.warmup = false;
     expandedCards.clear();
+    const holding = startHoldIfMinute([set]);
     celebrateSet(set, !set.isWarmup && working.length+1===planRow.sets);
     renderApp();
     if(planForLog(log).indexOf(planRow) !== before) scrollCardIntoView(planRow.exerciseId);
+    if(holding) return;
     // Inside a superset only the last member rests; the others go straight to the next exercise.
     const groupIds = opts.groupIds;
     if(!groupIds) autoStartRest([planRow], ex.name);
@@ -987,19 +1205,36 @@ function isFreshSet(listKey, set){
   return Date.now() - (set.ts||0) < 10000;
 }
 
-function liveCoachBox(fb, {listKey, draft, metric, latest, fresh, exerciseId}){
+function spotProgressMeterHtml(progress){
+  if(!progress || !(progress.setsNeeded>0)) return '';
+  const slots = Array.from({length:progress.setsNeeded},(_,i)=>
+    `<span class="spot-slot${i<progress.atTarget?' on':''}" aria-hidden="true"></span>`).join('');
+  return `
+    <div class="spot-meter">
+      <div class="spot-meter-label">Toward more weight · ${progress.atTarget} of ${progress.setsNeeded} at ${progress.repsTarget}+</div>
+      <div class="spot-slots" role="img" aria-label="${progress.atTarget} of ${progress.setsNeeded} sets at ${progress.repsTarget} or more reps">${slots}</div>
+    </div>`;
+}
+function liveCoachBox(fb, {listKey, draft, metric, latest, fresh, exerciseId, planRow, status, todaySets}){
   const text = pickCoachLine(listKey, latest.id, fb);
   const applied = fb.nextWeight!=null && Math.abs((draft.weight||0) - fb.nextWeight) < 0.001;
   const label = fb.nextWeight!=null ? escapeHtml(loadLabel(fb.nextWeight, metric)) : '';
   const vol = fb.volume && fb.volume.last>0 && fb.volume.today>0 ? fb.volume : null;
   const pct = vol ? Math.round(vol.today/vol.last*100) : 0;
+  const chips = spotterChipActions(planRow, todaySets||[], status||{}, metric);
+  const allDone = planRow && (todaySets||[]).filter(s=>!s.isWarmup && !s.isDropSet).length >= (planRow.sets||0);
+  const showChips = !allDone && !applied;
   const box = el(`
     <div class="suggest-box coach-box tone-${fb.tone}${fresh?' coach-pop':''}" aria-live="polite">
       ${guideInfoBtnHtml()}
       ${SPOTTER_LABEL}
       <div class="sb-line">${escapeHtml(applied ? `Next set at ${loadLabel(fb.nextWeight, metric)}` : text)}</div>
       ${fb.note ? `<div class="lb-note">${escapeHtml(fb.note)}</div>` : ''}
+      ${spotProgressMeterHtml(fb.progress)}
+      <div class="spot-live" data-live-spotter aria-live="polite"></div>
       ${fb.nextWeight!=null && !applied ? `<button type="button" class="btn lb-use" data-use>Use ${label}</button>` : ''}
+      ${showChips && chips.length ? `<div class="spot-chips" data-spot-chips>${chips.map(c=>
+        `<button type="button" class="spot-chip" data-chip="${c.key}">${escapeHtml(c.label)}</button>`).join('')}</div>` : ''}
       ${vol ? `
         <div class="sb-progress">
           <span>Volume ${vol.today.toLocaleString()} / ${vol.last.toLocaleString()} ${units()} last time${pct>100 ? ` (+${pct-100}%)` : ''}</span>
@@ -1014,6 +1249,7 @@ function liveCoachBox(fb, {listKey, draft, metric, latest, fresh, exerciseId}){
     hapticTick(false);
     renderApp();
   };
+  box._spotChips = chips;
   bindGuideInfo(box, 'overload');
   return box;
 }
@@ -1115,6 +1351,7 @@ function logSupersetRound(members, log){
   expandedCards.clear();
   celebrateSets(logged);
   renderApp();
+  if(startHoldIfMinute(logged)) return;
   const names = members.map(m=> (getExercise(m.row.exerciseId)||{}).name).filter(Boolean);
   autoStartRest(members.map(m=>m.row), names.join(' + '));
 }

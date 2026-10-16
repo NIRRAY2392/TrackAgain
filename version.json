@@ -1,14 +1,14 @@
 {
-    "version":  "1.4.0",
-    "build":  5,
-    "date":  "2026-10-07",
+    "version":  "1.5.0",
+    "build":  6,
+    "date":  "2026-10-16",
     "apk":  "downloads/TrackAgain.apk",
-    "apkSize":  4219342,
+    "apkSize":  4557668,
     "notes":  "downloads/",
     "highlights":  [
-                       "Live coaching on every exercise card",
-                       "The rest-complete alert now says what is next",
-                       "A rest alert could still go off after you stopped the timer or finished the workout",
-                       "PR preview while you set up a set"
+                       "Minute countdown for plank and treadmill",
+                       "Plank and treadmill use separate min and sec steppers, so you can log 0:05 or 2:40 — not only whole minutes",
+                       "Spotter no longer suggests odd mid-set jumps (like +1 kg on curls) that ignored the normal weight step",
+                       "Live Spotter on each exercise"
                    ]
 }

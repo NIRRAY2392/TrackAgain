@@ -47,14 +47,95 @@ function qa(sel, root=document){ return [...root.querySelectorAll(sel)]; }
 function escapeHtml(value){ return String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 let toastTimer = null;
+let toastHideTimer = null;
 /* `action` is optional: {label, onClick} adds a button (e.g. Undo) and keeps the toast up longer. */
 function showToast(message, isPR, action){
   const root = document.getElementById('toastRoot');
-  root.innerHTML = `<div class="toast ${isPR?'pr':''}">${escapeHtml(message)}${action ? `<button type="button" class="toast-action">${escapeHtml(action.label)}</button>` : ''}</div>`;
   if(toastTimer) clearTimeout(toastTimer);
-  const clear = ()=>{ root.innerHTML=''; if(toastTimer) clearTimeout(toastTimer); toastTimer = null; };
+  if(toastHideTimer) clearTimeout(toastHideTimer);
+  root.innerHTML = `<div class="toast-wrap" role="status" aria-live="polite"><div class="toast ${isPR?'pr':''} toast-in">${escapeHtml(message)}${action ? `<button type="button" class="toast-action">${escapeHtml(action.label)}</button>` : ''}</div></div>`;
+  const clear = ()=>{
+    const toast = root.querySelector('.toast');
+    if(toast){
+      toast.classList.remove('toast-in');
+      toast.classList.add('toast-out');
+      toastHideTimer = setTimeout(()=>{ root.innerHTML=''; toastHideTimer = null; }, 220);
+    } else root.innerHTML='';
+    if(toastTimer) clearTimeout(toastTimer);
+    toastTimer = null;
+  };
   if(action) root.querySelector('.toast-action').onclick = ()=>{ clear(); action.onClick(); };
-  toastTimer = setTimeout(clear, action ? 4000 : (isPR?2600:1800));
+  toastTimer = setTimeout(clear, action ? 4200 : (isPR?2800:2000));
+}
+
+/* In-app dropdown: looks like a field, opens a choice sheet instead of a native <select>. */
+function choiceFieldHtml(opts){
+  opts = opts || {};
+  const disabled = !!opts.disabled;
+  return `${opts.label!=null ? `<label>${escapeHtml(opts.label)}</label>` : ''}
+    <button type="button" class="choice-field${disabled?' is-disabled':''}" id="${escapeHtml(opts.id||'')}"
+      data-value="${escapeHtml(opts.value==null?'':opts.value)}" ${disabled?'disabled':''}
+      aria-haspopup="listbox" aria-label="${escapeHtml(opts.label||opts.display||'Choose')}">
+      <span class="choice-field-value" data-display>${escapeHtml(opts.display==null?'':opts.display)}</span>
+      ${icon('chevronDown',18)}
+    </button>`;
+}
+function choiceFieldValue(btn){ return btn ? btn.dataset.value : ''; }
+function setChoiceField(btn, value, display){
+  if(!btn) return;
+  btn.dataset.value = value==null ? '' : String(value);
+  const d = q('[data-display]', btn);
+  if(d) d.textContent = display==null ? '' : String(display);
+}
+function openChoiceSheet(opts){
+  opts = opts || {};
+  const options = opts.options || [];
+  const formBusy = (()=>{
+    const n = document.getElementById(SHEET_ROOT.form);
+    return !!(n && n.innerHTML.trim());
+  })();
+  return openSheet({
+    root: opts.root || SHEET_ROOT.picker,
+    zIndex: opts.zIndex || (formBusy ? 220 : 160),
+    title: opts.title || 'Choose',
+    build:(body, sheet)=>{
+      const list = el(`<div class="choice-list" role="listbox"></div>`);
+      options.forEach(opt=>{
+        const value = opt.value;
+        const label = opt.label != null ? opt.label : String(value);
+        const on = String(value)===String(opts.current);
+        const row = el(`
+          <button type="button" class="choice-row${on?' on':''}" role="option" aria-selected="${on}">
+            <span class="choice-row-label">${escapeHtml(label)}</span>
+            <span class="choice-row-check" aria-hidden="true">${on ? icon('check',18) : ''}</span>
+          </button>`);
+        row.onclick = ()=>{
+          sheet.close();
+          if(opts.onPick) opts.onPick(value, opt);
+        };
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+    }
+  });
+}
+function bindChoiceField(btn, opts){
+  if(!btn || btn.disabled) return;
+  btn.onclick = ()=>{
+    const options = typeof opts.options==='function' ? opts.options() : (opts.options||[]);
+    openChoiceSheet({
+      title: opts.title || btn.getAttribute('aria-label') || 'Choose',
+      options,
+      current: choiceFieldValue(btn),
+      root: opts.root,
+      zIndex: opts.zIndex,
+      onPick:(value, opt)=>{
+        const label = opt && opt.label != null ? opt.label : String(value);
+        setChoiceField(btn, value, label);
+        if(opts.onChange) opts.onChange(value, opt);
+      }
+    });
+  };
 }
 /* Light tick on every log; a double pulse for PRs and finishing the target sets. */
 function hapticTick(strong){
@@ -153,7 +234,7 @@ function setScreenAwake(on){
   const call = want ? plugin.keepAwake : plugin.allowSleep;
   if(typeof call==='function') Promise.resolve(call.call(plugin)).catch(()=>{ screenKeptAwake = !want; });
 }
-/* Android app only: hide the status and navigation bars (Settings → Full screen). */
+/* Android APK only: edge-to-edge immersive bars (Settings → Full screen). No-op in browser. */
 function setFullscreen(on){
   const plugin = capPlugin('Fullscreen');
   if(!plugin || typeof plugin.set!=='function') return;
@@ -411,6 +492,31 @@ function searchFieldHtml(id, placeholder, value){
   return `<div class="search-wrap"><span class="mag">${icon('search',16)}</span><input id="${id}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value||'')}"></div>`;
 }
 function tagsHtml(list){ return list.map(t=>`<span class="tag">${escapeHtml(t)}</span>`).join(''); }
+/* Collapsed how-to. Button is placed by the caller at the top-right of the row. */
+function warmupHowToButtonHtml(){
+  return `<button type="button" class="wu-howto-btn" data-howto-toggle aria-expanded="false"><span>How to</span>${icon('chevronDown',14)}</button>`;
+}
+function warmupHowToBodyHtml(howTo){
+  const text = String(howTo||'').trim();
+  if(!text) return '';
+  return `<p class="wu-howto-body" hidden>${escapeHtml(text)}</p>`;
+}
+function bindWarmupHowTo(root){
+  if(!root) return;
+  qa('[data-howto-toggle]', root).forEach(btn=>{
+    btn.onclick = (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      const scope = btn.closest('.wu-howto-scope') || btn.parentElement;
+      if(!scope) return;
+      const body = q('.wu-howto-body', scope);
+      const open = !scope.classList.contains('howto-open');
+      scope.classList.toggle('howto-open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if(body) body.hidden = !open;
+    };
+  });
+}
 
 /* Slot-machine clock: each digit is a reel that rolls to its new value.
    The reel holds 0-9 twice. Counting up rests on the first copy and rolls
@@ -543,16 +649,18 @@ function setDotsHtml(done, target, freshIndex){
    - Heads-up banners need @capacitor/local-notifications, a HIGH
      importance channel, POST_NOTIFICATIONS (Android 13+), and the user
      tapping Allow. A plain browser tab cannot overlay other apps.
-   - Do not set channel sound to a raw filename. Android 8+ treats a
-     missing file as "App provided" and plays nothing. Omit sound so the
-     channel keeps the system default notification sound.
-   - Android will not update an existing channel. REST_NOTIFY_CHANNEL is
-     versioned; the previous silent channel is deleted on launch.
+   - Phone default: omit channel sound so Android uses the system notification
+     sound. Whistle: set channel sound to res/raw/whistle (missing file then
+     plays nothing — keep the raw asset in the APK).
+   - Android will not update an existing channel's sound. Default and whistle
+     use separate versioned channel ids; the old silent channel is deleted.
    - On-time delivery needs exact alarms (Alarms & reminders). Some phones
      also delay alarms until Battery is Unrestricted. The app asks when it
      can; the manual steps live in Settings, plus one dismissible sheet. */
-const REST_NOTIFY_CHANNEL = 'rest-heads-up-v2';
+const REST_NOTIFY_CHANNEL_DEFAULT = 'rest-heads-up-v2';
+const REST_NOTIFY_CHANNEL_WHISTLE = 'rest-heads-up-whistle-v1';
 const REST_NOTIFY_CHANNEL_OLD = 'rest-heads-up-v1';
+const REST_SOUND_WHISTLE = 'whistle';
 const WORKOUT_REST_ID = 'workout';
 const restTimers = {}; // WORKOUT_REST_ID -> {end, seconds, name, token}
 let restSeq = 0;
@@ -565,6 +673,12 @@ let restTicker = null;
 
 function restNotificationsAvailable(){ return !!capPlugin('LocalNotifications'); }
 function hapticsAvailable(){ return !!capPlugin('Haptics'); }
+function restSoundChoice(){
+  return DATA && DATA.settings && DATA.settings.restSound===REST_SOUND_WHISTLE ? REST_SOUND_WHISTLE : 'default';
+}
+function restNotifyChannelId(){
+  return restSoundChoice()===REST_SOUND_WHISTLE ? REST_NOTIFY_CHANNEL_WHISTLE : REST_NOTIFY_CHANNEL_DEFAULT;
+}
 function restNotificationId(exerciseId){
   let h = 0; for(let i=0;i<exerciseId.length;i++) h = (h*31 + exerciseId.charCodeAt(i)) | 0;
   return Math.abs(h) % 2000000000;
@@ -577,22 +691,39 @@ function isAndroidApp(){
   catch(_){ return false; }
 }
 function batteryOptimizationPlugin(){ return capPlugin('BatteryOptimization'); }
+function previewRestSound(choice){
+  if(choice!==REST_SOUND_WHISTLE) return;
+  try{
+    const a = new Audio('sounds/whistle.m4a');
+    a.play().catch(()=>{});
+  }catch(_){}
+}
 async function ensureRestNotifyChannel(){
   if(!restNotificationsAvailable()) return;
   const LN = capPlugin('LocalNotifications');
   try{ if(LN.deleteChannel) await LN.deleteChannel({id: REST_NOTIFY_CHANNEL_OLD}); }catch(_){}
+  const base = {
+    description: 'Alert when rest ends, including over other apps',
+    importance: 5,
+    visibility: 1,
+    vibration: true,
+    lights: true
+  };
   try{
     /* No sound field: NotificationChannel then uses the system default. */
-    await LN.createChannel({
-      id: REST_NOTIFY_CHANNEL,
-      name: 'Rest complete',
-      description: 'Alert when rest ends, including over other apps',
-      importance: 5,
-      visibility: 1,
-      vibration: true,
-      lights: true
-    });
+    await LN.createChannel(Object.assign({
+      id: REST_NOTIFY_CHANNEL_DEFAULT,
+      name: 'Rest complete'
+    }, base));
   }catch(err){ console.error(APP_NAME+': could not create notification channel', err); }
+  try{
+    /* res/raw/whistle.m4a in the Android project — sound name without path. */
+    await LN.createChannel(Object.assign({
+      id: REST_NOTIFY_CHANNEL_WHISTLE,
+      name: 'Rest complete (whistle)',
+      sound: REST_SOUND_WHISTLE
+    }, base));
+  }catch(err){ console.error(APP_NAME+': could not create whistle notification channel', err); }
 }
 async function exactAlarmStatus(){
   if(!restNotificationsAvailable()) return 'unknown';
@@ -748,7 +879,7 @@ async function scheduleRestNotification(exerciseId, seconds, exerciseName, token
         title,
         body,
         largeBody: body,
-        channelId: REST_NOTIFY_CHANNEL,
+        channelId: restNotifyChannelId(),
         autoCancel: true,
         schedule,
         extra:{ type:'rest', exerciseId }
@@ -887,5 +1018,221 @@ function restControlsEl(exerciseId, planRow, exerciseName){
     row.appendChild(b);
   });
   return row;
+}
+
+/* --- plank / treadmill countdown --------------------------------------
+   The set is logged first. holdStartedAt on that set is the clock, so
+   locking the phone does not freeze it. Stop and later edits leave the
+   logged minutes alone; editing the duration retargets a running countdown. */
+const holdTokens = {};
+const holdWebTimers = {};
+const holdAlerted = new Set();
+let holdSeq = 0;
+let holdTicker = null;
+
+function holdRemainingMs(set){
+  if(!set || typeof set.holdStartedAt!=='number') return 0;
+  return set.holdStartedAt + Math.max(0, Math.round(set.duration||0))*1000 - Date.now();
+}
+function findActiveHold(log){
+  log = log || activeWorkoutLog();
+  if(!log || !log.sets) return null;
+  for(let i=log.sets.length-1;i>=0;i--){
+    const s = log.sets[i];
+    if(typeof s.holdStartedAt==='number' && holdRemainingMs(s)>0) return s;
+  }
+  return null;
+}
+function holdRemainingText(set){
+  const remain = holdRemainingMs(set);
+  if(remain<=0) return '0:00';
+  const total = Math.ceil(remain/1000);
+  const m = Math.floor(total/60), s = total%60;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function holdProgressPct(set){
+  const total = Math.max(1, Math.round(set.duration||0)*1000);
+  const remain = Math.max(0, holdRemainingMs(set));
+  return Math.max(0, Math.min(100, Math.round((1 - remain/total)*100)));
+}
+function holdStillLive(setId, token){
+  return holdTokens[setId]===token;
+}
+function cancelHoldNotification(setId){
+  holdTokens[setId] = ++holdSeq;
+  if(holdWebTimers[setId]){ clearTimeout(holdWebTimers[setId]); delete holdWebTimers[setId]; }
+  if(!restNotificationsAvailable() || !setId) return;
+  capPlugin('LocalNotifications').cancel({notifications:[{id:restNotificationId('hold:'+setId)}]}).catch(()=>{});
+}
+function cancelAllHoldNotifications(){
+  Object.keys(holdTokens).forEach(id=> cancelHoldNotification(id));
+  if(!restNotificationsAvailable()) return;
+  const LN = capPlugin('LocalNotifications');
+  if(typeof LN.getPending!=='function') return;
+  LN.getPending().then(res=>{
+    const holds = ((res && res.notifications) || []).filter(n=> n && n.extra && n.extra.type==='hold');
+    if(holds.length) return LN.cancel({notifications:holds.map(n=>({id:n.id}))});
+  }).catch(()=>{});
+}
+function releaseHold(set){
+  if(!set || typeof set.holdStartedAt!=='number') return;
+  cancelHoldNotification(set.id);
+  delete set.holdStartedAt;
+}
+function clearRunningHolds(){
+  const log = activeWorkoutLog();
+  if(!log || !log.sets) return;
+  log.sets.forEach(releaseHold);
+}
+function clearWorkoutHolds(log){
+  if(!log || !log.sets) return;
+  log.sets.forEach(releaseHold);
+  clearHoldTicker();
+}
+function ensureHoldTicker(){
+  if(holdTicker) return;
+  holdTicker = setInterval(tickHolds, 250);
+}
+function clearHoldTicker(){
+  if(!holdTicker) return;
+  clearInterval(holdTicker);
+  holdTicker = null;
+}
+async function scheduleHoldNotification(set, opts){
+  if(!DATA.settings.restNotify || !set || typeof set.holdStartedAt!=='number') return;
+  const quiet = !!(opts && opts.quiet);
+  const token = ++holdSeq;
+  const setId = set.id;
+  holdTokens[setId] = token;
+  const seconds = Math.ceil(holdRemainingMs(set)/1000);
+  if(seconds<=0 || !holdStillLive(setId, token)) return;
+  const name = (getExercise(set.exerciseId)||{}).name || 'Hold';
+  const title = `${name} done`;
+  const body = `${formatHoldAmount(set.duration)} is up.`;
+  const ok = await ensureRestNotifyPermission();
+  if(!holdStillLive(setId, token) || typeof set.holdStartedAt!=='number') return;
+  if(!ok){
+    if(!quiet) showToast('Allow notifications for '+APP_NAME+' in phone settings so the timer can alert you');
+    return;
+  }
+  const waitMs = Math.max(1000, seconds*1000);
+  if(restNotificationsAvailable()){
+    const LocalNotifications = capPlugin('LocalNotifications');
+    const id = restNotificationId('hold:'+setId);
+    const at = new Date(Date.now()+waitMs);
+    const exact = await exactAlarmStatus();
+    if(!holdStillLive(setId, token)) return;
+    const schedule = {at, allowWhileIdle:true, isExactNotification: exact!=='denied'};
+    LocalNotifications.cancel({notifications:[{id}]}).catch(()=>{}).finally(()=>{
+      if(!holdStillLive(setId, token)) return;
+      LocalNotifications.schedule({notifications:[{
+        id, title, body, largeBody: body,
+        channelId: restNotifyChannelId(),
+        autoCancel: true,
+        schedule,
+        extra:{ type:'hold', setId }
+      }]}).catch(err=> console.error(APP_NAME+': schedule hold notification failed', err));
+    });
+    return;
+  }
+  if(holdWebTimers[setId]){ clearTimeout(holdWebTimers[setId]); holdWebTimers[setId] = null; }
+  if('Notification' in window && Notification.permission==='granted'){
+    holdWebTimers[setId] = setTimeout(()=>{
+      if(!holdStillLive(setId, token)) return;
+      try{
+        const n = new Notification(title, {body, tag:'trackagain-hold', requireInteraction:true, silent:false, vibrate:[400,120,400]});
+        n.onclick = ()=>{ try{ window.focus(); n.close(); }catch(_){ } };
+      }catch(_){}
+    }, waitMs);
+  }
+}
+function beginHoldCountdown(set){
+  if(!activeWorkoutLog()) return false;
+  if(!set || set.isWarmup || set.isDropSet || !(set.duration>0)) return false;
+  if(!isMinuteHold(getExercise(set.exerciseId))) return false;
+  clearRunningHolds();
+  stopRestTimer(WORKOUT_REST_ID);
+  set.holdStartedAt = Date.now();
+  saveData(DATA);
+  ensureHoldTicker();
+  scheduleHoldNotification(set);
+  if(DATA.settings.restNotify) ensureRestAlertsReady();
+  refreshTimerBar();
+  return true;
+}
+function startHoldIfMinute(sets){
+  const holds = (sets||[]).filter(s=> s && !s.isWarmup && !s.isDropSet && (s.duration||0)>0 && isMinuteHold(getExercise(s.exerciseId)));
+  if(!holds.length) return false;
+  return beginHoldCountdown(holds[holds.length-1]);
+}
+function completeActiveHold(set){
+  if(!set || typeof set.holdStartedAt!=='number') return;
+  if(holdRemainingMs(set)>250) return;
+  const name = (getExercise(set.exerciseId)||{}).name || 'Hold';
+  const id = set.id;
+  releaseHold(set);
+  saveData(DATA);
+  if(!holdAlerted.has(id)){
+    holdAlerted.add(id);
+    if(!document.hidden){
+      vibrateRestEnd();
+      showToast(`${name} done`);
+    }
+  }
+  refreshTimerBar();
+  restAfterHold(set);
+}
+function stopActiveHold(){
+  const set = findActiveHold();
+  if(!set) return;
+  releaseHold(set);
+  saveData(DATA);
+  refreshTimerBar();
+  restAfterHold(set);
+}
+function syncHoldToDuration(set){
+  if(!set || typeof set.holdStartedAt!=='number') return;
+  if(holdRemainingMs(set)<=0) completeActiveHold(set);
+  else {
+    scheduleHoldNotification(set);
+    refreshTimerBar();
+  }
+}
+function holdControlsEl(){
+  const row = el(`<div class="tb-rest"></div>`);
+  const stop = el(`<button class="btn">Stop</button>`);
+  stop.onclick = ()=> stopActiveHold();
+  row.appendChild(stop);
+  return row;
+}
+function tickHolds(){
+  const log = activeWorkoutLog();
+  if(!log || !log.sets){ clearHoldTicker(); return; }
+  const pending = log.sets.filter(s=> typeof s.holdStartedAt==='number');
+  if(!pending.length){ clearHoldTicker(); return; }
+  const expired = pending.filter(s=> holdRemainingMs(s)<=0);
+  if(expired.length){
+    expired.forEach(completeActiveHold);
+    return;
+  }
+  const set = findActiveHold(log);
+  if(!set){ clearHoldTicker(); return; }
+  const node = document.querySelector('[data-holdcountdown]');
+  const fill = document.querySelector('[data-holdfill]');
+  if(node) paintSlotClock(node, holdRemainingText(set), true);
+  if(fill) fill.style.width = `${holdProgressPct(set)}%`;
+}
+function resumeHoldCountdown(){
+  const log = activeWorkoutLog();
+  if(!log || !log.sets){ clearHoldTicker(); return; }
+  const pending = log.sets.filter(s=> typeof s.holdStartedAt==='number');
+  if(!pending.length){ clearHoldTicker(); return; }
+  const expired = pending.filter(s=> holdRemainingMs(s)<=0);
+  if(expired.length){
+    expired.forEach(completeActiveHold);
+    return;
+  }
+  ensureHoldTicker();
+  pending.forEach(s=> scheduleHoldNotification(s, {quiet:true}));
 }
 

@@ -16,6 +16,41 @@ How this file works
 ### Fixes
 ### Nerd stuff
 
+# v1.5.0
+## 16 October 2026
+### Features
+- **Minute countdown for plank and treadmill.** Log the minutes first, then a countdown runs in the workout bar. Stop leaves what you logged, and you can tap the set afterwards to change it.
+- **Live Spotter on each exercise.** After a set, Spotter shows a clear “toward more weight” meter, updates as you change weight and reps, and offers tap chips (Hit target, Beat last time) that fill the steppers.
+- **Day warm-ups on your split.** Each day can have a short bodyweight warm-up under Exercises. Edit them in Split, tap reset for everyday basics, or add more from the library, then check them off at the start of the workout (not on Home).
+- **Warm-up library.** Settings → Warm-up library browses bodyweight warm-ups by muscle (search, add, edit). Split day “Add warm-up” picks from the same list.
+### Improvements
+- Plank and treadmill use separate min and sec steppers, so you can log 0:05 or 2:40 — not only whole minutes.
+- The old “1/2 sets at target toward more weight” line is replaced by a plain meter, so it is clear those slots are about earning more weight, not today’s set dots.
+- Spotter’s live line says “Same as last set” instead of “ties set 1”, and the Match last chip is gone (Hit target and Beat last time stay).
+- Split day editor: Add exercise / Save day are full width again; warm-up rows match exercise cards; section titles are larger; warm-up reset restores everyday bodyweight basics (no bands or tools).
+- Everyday warm-up suggestions are bodyweight-only basics; muscle-specific drills live in the Warm-up library instead (no bands or tools).
+- Old tool warm-ups already saved on a day (like band curls) are replaced with the everyday bodyweight basics the next time the app opens.
+- **How to** sits at the top right of each warm-up.
+- **Weight jumps follow your gym.** Spotter and “ready for more weight” always move at least one full jump. Edit Weight jump per exercise on the Split day (or leave blank for the equipment default — machines/cables 5 kg, dumbbells/bars 2.5 kg).
+- Settings explains that Full screen only applies in the installed Android APK (not in a browser preview).
+- **In-app pickers** for Settings, History range, and exercise details — no more stock Android dropdowns.
+- Toasts sit steadier and use the app’s card look instead of a harsh black pill.
+- **Rest alert sound.** In Settings → Rest timer, pick Phone default or Whistle for the rest-complete (and hold) notification.
+### Fixes
+- Spotter no longer suggests odd mid-set jumps (like +1 kg on curls) that ignored the normal weight step.
+- **Full screen on Android** fills the display edge-to-edge and keeps the status and navigation bars hidden more reliably (swipe from the edge still peeks them briefly).
+- Checkboxes no longer flash a big lime focus rectangle when you tap them.
+- When min and max reps are the same, Spotter and the exercise card say “15 reps” instead of “15–15”.
+### Nerd stuff
+- Minute holds (name contains plank or treadmill) still store `duration` in seconds, with min + sec steppers and sheet fields. `holdStartedAt` on the set drives the countdown, so locking the phone does not freeze it. Rest starts when the countdown ends or is stopped. Farmer's carry stays in seconds.
+- `liveSetFeedback()` now returns `progress` (`repsTarget`, `setsNeeded`, `atTarget`, `trackWeight`). `makeStepperPreview()` and `spotterChipActions()` drive the live Spotter line and chips in `liveCoachBox()`.
+- Split days store `warmups` (`id`, `title`, `detail`, `minutes`, `howTo`, optional `libraryId`). `basicWarmupsForDay()` seeds from `WARMUP_BASICS`. `DATA.warmupLibrary` seeded from `WARMUP_LIBRARY_SEED`. Workout logs snapshot `warmups` / `warmupDone`; not counted as sets. `resolveWarmupHowTo` drives the How to disclosure. Days that still list a tool warm-up are rewritten to `WARMUP_BASICS` on migrate.
+- `loadStepFor(ex, planRow)` resolves plan → exercise → equip. `snapLoad` / `suggestHeavierLoad` harden Spotter `nextWeight`. Machine/cable defaults are 5 kg. Plan rows store optional `loadStep`.
+- `MainActivity.applyFullscreen` uses edge-to-edge, transparent system bars, cutout short-edges, and re-hides bars after a transient swipe.
+- `choiceFieldHtml` / `openChoiceSheet` / `bindChoiceField` replace native `<select>`. Toasts use `.toast-wrap` for position and `.toast` for opacity/slide only. Field input rules exclude checkbox/radio.
+- `formatRepRange(min, max)` collapses equal bounds to a single number for Spotter and plan target lines.
+- `settings.restSound` (`default` | `whistle`). Whistle channel `rest-heads-up-whistle-v1` uses `res/raw/whistle`; web preview plays `sounds/whistle.m4a`.
+
 # v1.4.0
 ## 7 October 2026
 ### Features

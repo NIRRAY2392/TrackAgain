@@ -2,7 +2,7 @@
 
 /* --- log / edit a set ------------------------------------------------ */
 function metricFieldId(prefix, name){ return (prefix||'')+name; }
-function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix){
+function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix, ex){
   const weight = existingSet ? existingSet.weight : (prefillWeight!=null ? prefillWeight : '');
   const reps   = existingSet ? existingSet.reps : '';
   const secs   = existingSet ? existingSet.duration : '';
@@ -18,10 +18,15 @@ function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix){
       ${metric==='assisted'?'<p class="faint small" style="margin:-4px 0 10px;">Lower assistance = stronger 💪</p>':''}`;
   }
   if(metric==='reps_only') return `<div class="field"><label>Reps</label><input id="${repsId}" type="number" min="1" inputmode="numeric" value="${reps}" placeholder="e.g. 12"></div>`;
+  if(metric==='time' && isMinuteHold(ex)){
+    const minId = metricFieldId(idPrefix,'fldMins');
+    const filled = secs!=='' && secs!=null;
+    return `<div class="field"><label>Duration</label>${holdFieldsHtml(filled ? secs : null, {minId, secId:secsId, blank:!filled})}</div>`;
+  }
   if(metric==='time')      return `<div class="field"><label>Duration (seconds)</label><input id="${secsId}" type="number" min="1" inputmode="numeric" value="${secs}" placeholder="e.g. 45"></div>`;
   return '';
 }
-function readMetricFields(metric, root, idPrefix){
+function readMetricFields(metric, root, idPrefix, ex){
   if(hasLoadField(metric)){
     const weightEl = q('#'+metricFieldId(idPrefix,'fldWeight'),root);
     const repsEl = q('#'+metricFieldId(idPrefix,'fldReps'),root);
@@ -37,6 +42,9 @@ function readMetricFields(metric, root, idPrefix){
     return (isNaN(reps)||reps<=0) ? null : {reps};
   }
   if(metric==='time'){
+    if(isMinuteHold(ex)){
+      return readHoldFields(q('#'+metricFieldId(idPrefix,'fldMins'),root), q('#'+metricFieldId(idPrefix,'fldSecs'),root));
+    }
     const secsEl = q('#'+metricFieldId(idPrefix,'fldSecs'),root);
     if(!secsEl) return null;
     const duration = parseInt(secsEl.value,10);
@@ -49,6 +57,7 @@ function readMetricFields(metric, root, idPrefix){
 function logNormalSet(exerciseId, values, effort, isWarmup, intent){
   const log = todayLog();
   persistLog(log);
+  clearRunningHolds();
   const set = {id:uid(), exerciseId, difficulty:effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:!!isWarmup, ...values};
   log.sets.push(set);
   promoteStartedExercise(log, exerciseId);
@@ -80,6 +89,7 @@ function validSetValues(v){
    whose first stage is its original values. Returns false at the stage cap. */
 function addDropStage(set, values, effort){
   if(set.isDropSet && set.stages.length>=5) return false;
+  releaseHold(set);
   if(!set.isDropSet){
     set.stages = [pickSetValues(set)];
     SET_VALUE_KEYS.forEach(k=> delete set[k]);
@@ -111,11 +121,13 @@ function restoreSet(snap){
   else snap.log.sets.splice(Math.min(snap.index, snap.log.sets.length), 0, snap.copy);
   recomputePRs(snap.copy.exerciseId);
   saveData(DATA);
+  if(snap.copy.holdStartedAt) resumeHoldCountdown();
 }
 /* Removes a whole set (stage null) or one drop stage. A drop set left with a
    single stage turns back into a normal set. Returns a snapshot for undo. */
 function removeSetOrStage(set, stage){
   const snap = snapshotSet(set);
+  if(stage==null || !set.isDropSet) releaseHold(set);
   if(stage==null || !set.isDropSet){
     snap.log.sets.splice(snap.index, 1);
   } else {
@@ -133,7 +145,10 @@ function removeSetOrStage(set, stage){
 function deleteLoggedSet(set){
   confirmAction('Delete this set? This cannot be undone.', 'Delete', ()=>{
     const log = DATA.logs.find(l=> (l.sets||[]).includes(set));
-    if(log) log.sets = log.sets.filter(s=>s.id!==set.id);
+    if(log){
+      releaseHold(set);
+      log.sets = log.sets.filter(s=>s.id!==set.id);
+    }
     recomputePRs(set.exerciseId);
     saveData(DATA);
     closeSheets();
@@ -160,18 +175,22 @@ function openLogSetSheet(opts){
       delete existingSet.stages;
       recomputePRs(exerciseId);
       saveData(DATA);
+      const holdFinished = typeof existingSet.holdStartedAt==='number' && holdRemainingMs(existingSet)<=0;
+      syncHoldToDuration(existingSet);
       closeSheets();
-      showToast('Set updated');
+      if(!holdFinished) showToast('Set updated');
       renderApp();
     } else {
       const set = logNormalSet(exerciseId, values, effort, isWarmup, intent);
       closeSheets();
+      startHoldIfMinute([set]);
       celebrateSet(set);
       renderApp();
     }
   }
   function saveDropSet(finalStages){
     if(isEdit){
+      releaseHold(existingSet);
       Object.assign(existingSet, {difficulty:effort, intent:null, isDropSet:true, stages:finalStages, isPR:false, isWarmup:false});
       delete existingSet.weight; delete existingSet.reps; delete existingSet.duration;
       recomputePRs(exerciseId);
@@ -215,7 +234,8 @@ function openLogSetSheet(opts){
                 <div class="diffchip" data-effort-key="hard">Hard</div>
               </div>
             </div>
-            ${planRow && metric!=='time' ? `<p class="faint small">Target: ${planRow.repsMin}-${planRow.repsMax} reps${planRow.rpe?` · RPE ${planRow.rpe}`:''}</p>` : ''}
+            ${planRow && isMinuteHold(ex) ? `<p class="faint small">Target: ${formatHoldRange(planRow.repsMin, planRow.repsMax)}</p>` : ''}
+            ${planRow && metric!=='time' ? `<p class="faint small">Target: ${formatRepRange(planRow.repsMin, planRow.repsMax)} reps${planRow.rpe?` · RPE ${planRow.rpe}`:''}</p>` : ''}
             ${mode==='normal' ? `<label class="row" style="gap:8px;margin:12px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
               <input type="checkbox" data-warmup style="width:auto;" ${isWarmup?'checked':''}>
               <span>Warm-up set (skipped for PRs, overload, and auto-finish)</span>
@@ -236,7 +256,7 @@ function openLogSetSheet(opts){
 
         const fieldsBox = q('[data-fields]',wrap);
         if(mode==='normal'){
-          fieldsBox.appendChild(el(`<div>${metricFieldsHtml(metric, normalExisting, plannedLoad)}<div data-warn></div></div>`));
+          fieldsBox.appendChild(el(`<div>${metricFieldsHtml(metric, normalExisting, plannedLoad, '', ex)}<div data-warn></div></div>`));
           const warnBox = q('[data-warn]',fieldsBox);
           const repsInput = q('#fldReps',fieldsBox);
           // A saved rep count is already committed. Digits still being typed are not.
@@ -304,10 +324,10 @@ function openLogSetSheet(opts){
             stagesBox.appendChild(el(`
               <div class="stage-row">
                 <span class="stage-num">${i+1}</span>
-                <div class="fields" style="display:flex;gap:8px;flex:1;">${stageFieldsHtml(metric, stage, i)}</div>
+                <div class="fields" style="display:flex;gap:8px;flex:1;">${stageFieldsHtml(metric, stage, i, ex)}</div>
               </div>`));
           });
-          const captureStages = ()=>{ stages = stages.map((s,i)=> readStageFields(metric, wrap, i) || s); };
+          const captureStages = ()=>{ stages = stages.map((s,i)=> readStageFields(metric, wrap, i, ex) || s); };
           q('[data-add-stage]',dropWrap).onclick = ()=>{
             if(stages.length>=5) return;
             captureStages();
@@ -333,14 +353,14 @@ function openLogSetSheet(opts){
         q('[data-save]',wrap).onclick = ()=>{
           if(mode==='normal'){
             if(holdSaveForLowRepWarning()) return;
-            const values = readMetricFields(metric, wrap);
+            const values = readMetricFields(metric, wrap, '', ex);
             if(!values){ showToast('Enter valid numbers'); return; }
             const intent = !isWarmup && hasLoadField(metric) && strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
             saveNormalSet(values, intent);
           } else {
             const finalStages = [];
             for(let i=0;i<stages.length;i++){
-              const v = readStageFields(metric, wrap, i);
+              const v = readStageFields(metric, wrap, i, ex);
               if(!v){ showToast(`Enter valid numbers for stage ${i+1}`); return; }
               finalStages.push(v);
             }
@@ -415,14 +435,16 @@ function openSupersetLogSheet(members){
       body.appendChild(wrap);
       const list = q('[data-blocks]', wrap);
       blocks.forEach(block=>{
-        const target = block.metric!=='time'
-          ? `${block.row.repsMin}–${block.row.repsMax} reps${block.row.rpe?` · RPE ${block.row.rpe}`:''}`
+        const target = isMinuteHold(block.ex)
+          ? formatHoldRange(block.row.repsMin, block.row.repsMax)
+          : block.metric!=='time'
+          ? `${formatRepRange(block.row.repsMin, block.row.repsMax)} reps${block.row.rpe?` · RPE ${block.row.rpe}`:''}`
           : `${block.row.sets} holds`;
         const blockEl = el(`
           <div class="ss-block" data-block="${block.prefix}">
             <div class="name">${escapeHtml(block.ex.name)}</div>
             <p class="faint small" style="margin-bottom:8px;">${escapeHtml(target)}</p>
-            ${metricFieldsHtml(block.metric, supersetSeed(block.row), null, block.prefix)}
+            ${metricFieldsHtml(block.metric, supersetSeed(block.row), null, block.prefix, block.ex)}
             <div data-warn></div>
             <div class="field" style="margin-bottom:0;">
               <label>How hard?</label>
@@ -458,7 +480,7 @@ function openSupersetLogSheet(members){
       q('[data-save]', wrap).onclick = ()=>{
         const pending = [];
         for(const block of blocks){
-          const values = readMetricFields(block.metric, wrap, block.prefix);
+          const values = readMetricFields(block.metric, wrap, block.prefix, block.ex);
           if(!values){ showToast('Enter valid numbers for '+block.ex.name); return; }
           pending.push({block, values});
         }
@@ -474,6 +496,7 @@ function openSupersetLogSheet(members){
         if(held) return;
         const log = todayLog();
         persistLog(log);
+        clearRunningHolds();
         const saved = pending.map(({block, values})=>{
           const intent = !warmup && hasLoadField(block.metric) && block.strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
           const set = {id:uid(), exerciseId:block.row.exerciseId, difficulty:block.effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:warmup, ...values};
@@ -485,6 +508,7 @@ function openSupersetLogSheet(members){
         markWorkoutActivity(log);
         saveData(DATA);
         closeSheets();
+        startHoldIfMinute(saved);
         celebrateSets(saved);
         renderApp();
       };
@@ -494,9 +518,11 @@ function openSupersetLogSheet(members){
 
 /* --- adjust today's target load -------------------------------------- */
 function openLoadAdjustSheet(status){
-  const step = status.metric==='assisted' ? TRAINING.load.assistanceStepKg : loadStepFor(getExercise(status.exerciseId));
+  const planRow = (todayLog().plan||[]).find(r=>r && r.exerciseId===status.exerciseId) || null;
+  const step = loadStepFor(getExercise(status.exerciseId), planRow);
   let weight = status.targetWeight != null ? status.targetWeight
     : (status.suggestedWeight != null ? status.suggestedWeight : (status.referenceWeight || 0));
+  weight = snapLoad(weight, step);
   openSheet({
     root:SHEET_ROOT.picker, zIndex:150, title:"Today's weight",
     build:(body)=>{
@@ -607,7 +633,13 @@ function openExerciseFormSheet(opts){
   const isEdit = !!ex;
   const selected = new Set(ex ? secondaryOf(ex) : []);
   const metricLocked = isEdit && hasHistory(ex.id);
-  const option = (value, label, on)=> `<option value="${value}" ${on?'selected':''}>${escapeHtml(label)}</option>`;
+  const muscle0 = ex ? primaryOf(ex) : (opts.prefillMuscle || MUSCLES[0]);
+  const equip0 = ex ? equipOf(ex) : 'other';
+  const pattern0 = ex ? patternOf(ex) : 'other';
+  const tier0 = ex ? tierOf(ex) : 'compound';
+  const metric0 = ex ? metricOf(ex) : 'weight_reps';
+  const patternLabel = p=> (PATTERN_LABELS[p]||p).replace(/^./,c=>c.toUpperCase());
+  const tierLabel = t=> t==='isolation' ? 'Isolation (single-joint)' : 'Compound (multi-joint)';
 
   openSheet({
     root:SHEET_ROOT.form, zIndex:200,
@@ -618,20 +650,14 @@ function openExerciseFormSheet(opts){
           <p class="faint small" style="margin-bottom:12px;">${isEdit?'Update how this movement is tracked and matched to alternatives.':'It joins your library like any other movement — same tracking, same suggestions.'}</p>
           <div class="field"><label>Name</label><input id="exName" placeholder="e.g. Incline Cable Fly" value="${escapeHtml(ex?ex.name:(opts.prefillName||''))}"></div>
           <div class="grid2">
-            <div class="field"><label>Main muscle</label><select id="exMuscle">
-              ${MUSCLES.map(m=>option(m,m,(ex?primaryOf(ex):opts.prefillMuscle)===m)).join('')}</select></div>
-            <div class="field"><label>Equipment</label><select id="exEquip">
-              ${Object.keys(EQUIPMENT_LABELS).map(k=>option(k,EQUIPMENT_LABELS[k],(ex?equipOf(ex):'other')===k)).join('')}</select></div>
+            <div class="field">${choiceFieldHtml({id:'exMuscle', label:'Main muscle', value:muscle0, display:muscle0})}</div>
+            <div class="field">${choiceFieldHtml({id:'exEquip', label:'Equipment', value:equip0, display:EQUIPMENT_LABELS[equip0]||equip0})}</div>
           </div>
           <div class="grid2">
-            <div class="field"><label>Movement type</label><select id="exPattern">
-              ${Object.keys(PATTERN_LABELS).map(p=>option(p,PATTERN_LABELS[p].replace(/^./,c=>c.toUpperCase()),(ex?patternOf(ex):'other')===p)).join('')}</select></div>
-            <div class="field"><label>Effort</label><select id="exTier">
-              ${option('compound','Compound (multi-joint)',(ex?tierOf(ex):'compound')==='compound')}
-              ${option('isolation','Isolation (single-joint)',(ex?tierOf(ex):'compound')==='isolation')}</select></div>
+            <div class="field">${choiceFieldHtml({id:'exPattern', label:'Movement type', value:pattern0, display:patternLabel(pattern0)})}</div>
+            <div class="field">${choiceFieldHtml({id:'exTier', label:'Effort', value:tier0, display:tierLabel(tier0)})}</div>
           </div>
-          <div class="field"><label>How is it measured?</label><select id="exMetric" ${metricLocked?'disabled':''}>
-            ${Object.keys(METRIC_LABELS).map(k=>option(k,METRIC_LABELS[k],(ex?metricOf(ex):'weight_reps')===k)).join('')}</select>
+          <div class="field">${choiceFieldHtml({id:'exMetric', label:'How is it measured?', value:metric0, display:METRIC_LABELS[metric0]||metric0, disabled:metricLocked})}
             ${metricLocked?'<p class="faint small" style="margin-top:6px;">Locked because this exercise already has logged sets.</p>':''}</div>
           <div class="field"><label>Weight jump (kg, optional)</label>
             <input id="exLoadStep" type="number" min="0" step="0.25" inputmode="decimal" value="${ex && ex.loadStep>0 ? ex.loadStep : ''}">
@@ -656,9 +682,29 @@ function openExerciseFormSheet(opts){
         });
       };
       paintSecondary();
-      const equipSelect = q('#exEquip',body), stepInput = q('#exLoadStep',body);
-      const paintStepHint = ()=>{ stepInput.placeholder = `Default ${loadStepFor({equipment:equipSelect.value})} kg`; };
-      equipSelect.addEventListener('change', paintStepHint);
+      const equipBtn = q('#exEquip',body), stepInput = q('#exLoadStep',body);
+      const paintStepHint = ()=>{ stepInput.placeholder = `Default ${loadStepFor({equipment:choiceFieldValue(equipBtn)})} kg`; };
+      bindChoiceField(q('#exMuscle',body), {title:'Main muscle', options:()=> MUSCLES.map(m=>({value:m, label:m}))});
+      bindChoiceField(equipBtn, {
+        title:'Equipment',
+        options:()=> Object.keys(EQUIPMENT_LABELS).map(k=>({value:k, label:EQUIPMENT_LABELS[k]})),
+        onChange:()=> paintStepHint()
+      });
+      bindChoiceField(q('#exPattern',body), {
+        title:'Movement type',
+        options:()=> Object.keys(PATTERN_LABELS).map(p=>({value:p, label:patternLabel(p)}))
+      });
+      bindChoiceField(q('#exTier',body), {
+        title:'Effort',
+        options:()=> [
+          {value:'compound', label:tierLabel('compound')},
+          {value:'isolation', label:tierLabel('isolation')}
+        ]
+      });
+      if(!metricLocked) bindChoiceField(q('#exMetric',body), {
+        title:'How is it measured?',
+        options:()=> Object.keys(METRIC_LABELS).map(k=>({value:k, label:METRIC_LABELS[k]}))
+      });
       paintStepHint();
 
       q('[data-save]',body).onclick = ()=>{
@@ -667,18 +713,18 @@ function openExerciseFormSheet(opts){
         if(DATA.exercises.some(e=>e.name.toLowerCase()===name.toLowerCase() && (!ex || e.id!==ex.id))){
           showToast('You already have that exercise'); return;
         }
-        const primary = q('#exMuscle',body).value;
+        const primary = choiceFieldValue(q('#exMuscle',body));
         const stepRaw = stepInput.value.trim();
         const loadStep = stepRaw==='' ? null : roundTo(parseFloat(stepRaw), 2);
         if(loadStep!==null && !(loadStep>0 && loadStep<=50)){ showToast('Weight jump must be between 0 and 50 kg'); return; }
         const fields = {
           name, primary, muscleGroup:primary,
           secondary:[...selected].filter(m=>m!==primary),
-          pattern:q('#exPattern',body).value,
-          equipment:q('#exEquip',body).value,
+          pattern:choiceFieldValue(q('#exPattern',body)),
+          equipment:choiceFieldValue(equipBtn),
           equipmentNote:q('#exNote',body).value.trim(),
-          tier:q('#exTier',body).value,
-          metric:q('#exMetric',body).value,
+          tier:choiceFieldValue(q('#exTier',body)),
+          metric:choiceFieldValue(q('#exMetric',body)),
           loadStep,
           flagged:q('#exFlag',body).checked
         };
@@ -811,12 +857,13 @@ function renderSplitScreen(){
     }).filter(Boolean);
     const muscles = [...new Set(day.exercises.map(r=>primaryOf(getExercise(r.exerciseId))).filter(m=>m&&m!=='Other'))];
     const supersetCount = new Set(day.exercises.filter(r=>r.supersetId).map(r=>r.supersetId)).size;
+    const wuCount = Array.isArray(day.warmups) ? day.warmups.length : 0;
     const card = el(`
       <div class="day-card ${dk===today?'today':''}">
         <div class="row between">
           <div style="min-width:0;">
             <div class="dayname">${DAY_LABELS[dk]} ${dk===today?'<span class="tag" style="border-color:var(--accent);color:var(--accent);">Today</span>':''}</div>
-            <div class="faint small" style="margin-top:3px;">${escapeHtml(day.name)} · ${day.exercises.length ? day.exercises.length+' exercises' : 'rest day'}${supersetCount?` · 🔗 ${supersetCount} superset${supersetCount>1?'s':''}`:''}</div>
+            <div class="faint small" style="margin-top:3px;">${escapeHtml(day.name)} · ${day.exercises.length ? day.exercises.length+' exercises' : 'rest day'}${wuCount?` · ${wuCount} warm-up${wuCount>1?'s':''}`:''}${supersetCount?` · 🔗 ${supersetCount} superset${supersetCount>1?'s':''}`:''}</div>
           </div>
           <button class="btn ghost" data-edit>Edit →</button>
         </div>
@@ -947,9 +994,12 @@ function loadSplitPreset(presetId){
 function openDayEditor(dayKey){
   const splitKey = DATA.activeSplit;
   let draft = clone(splitDays()[dayKey]);
+  if(!Array.isArray(draft.exercises)) draft.exercises = [];
+  if(!Array.isArray(draft.warmups)) draft.warmups = [];
   let dirty = false;
   let selected = new Set(); // indices picked for "group into superset" — editor-only, not persisted
-  let openIdx = -1;         // the one expanded row — editor-only, not persisted
+  let openIdx = -1;         // the one expanded exercise row — editor-only
+  let openWuIdx = -1;       // the one expanded warm-up row — editor-only
   let editorScroll = 0;
 
   const discard = ()=>{ closeSheets(); renderApp(); };
@@ -970,6 +1020,7 @@ function openDayEditor(dayKey){
       build:(body, sheet)=>{
         const liveWorkout = activeWorkoutLog();
         const editingLiveDay = !!(liveWorkout && liveWorkout.dayKey===dayKey);
+        const wuMins = warmupsMinutes(draft.warmups);
         body.appendChild(el(`
           <div class="day-editor">
             <div class="field day-name"><label>Day name</label><input id="dayName" value="${escapeHtml(draft.name)}" placeholder="e.g. Push, Pull, Rest"></div>
@@ -981,9 +1032,20 @@ function openDayEditor(dayKey){
             <p class="day-hint">Tap an exercise to edit it. Tick 2–4 boxes to group a superset.</p>
             <div data-group-bar></div>
             <div class="day-rows" data-rows></div>
+            <div class="day-action-row" style="margin:10px 0 18px;">
+              <button class="btn secondary day-add" data-add>${icon('plus',16)} Add exercise</button>
+            </div>
+            <div class="day-editor-bar">
+              <span class="day-count">Warm-ups <span class="count-pill">${draft.warmups.length}</span>${wuMins?`<span class="day-count-meta">· ~${wuMins} min</span>`:''}</span>
+              <button type="button" class="iconbtn day-wu-reset" data-suggest-wu title="Reset to everyday basics" aria-label="Reset to everyday basics">${icon('reopen',18)}</button>
+            </div>
+            <p class="day-hint">Everyday basics are bodyweight only. Add more from the Warm-up library, or tap reset to restore the short basics list.</p>
+            <div class="day-rows" data-wu-rows></div>
+            <div class="day-action-row" style="margin:10px 0 4px;">
+              <button class="btn secondary day-add" data-add-wu>${icon('plus',16)} Add warm-up</button>
+            </div>
             <div class="day-editor-actions">
               <div class="day-action-row">
-                <button class="btn secondary day-add" data-add>${icon('plus',16)} Add exercise</button>
                 <button class="btn day-save" data-save>${icon('check',16)} Save day</button>
               </div>
               <p class="day-foot">Nothing is saved until you tap Save day.</p>
@@ -1016,7 +1078,7 @@ function openDayEditor(dayKey){
           selected,
           remapSelected,
           isOpen:(idx)=> idx===openIdx,
-          toggleOpen:(idx)=>{ openIdx = openIdx===idx ? -1 : idx; draw(); },
+          toggleOpen:(idx)=>{ openIdx = openIdx===idx ? -1 : idx; openWuIdx = -1; draw(); },
           toggleSelect:(idx)=>{ selected.has(idx) ? selected.delete(idx) : selected.add(idx); draw(); },
           ungroup:(groupId)=>{ draft.exercises.forEach(r=>{ if(r.supersetId===groupId) r.supersetId=null; }); dirty=true; draw(); },
           removeFromGroup:(idx)=>{
@@ -1043,6 +1105,16 @@ function openDayEditor(dayKey){
           }
         });
 
+        const wuBox = q('[data-wu-rows]',body);
+        if(!draft.warmups.length) wuBox.appendChild(el(`<p class="empty">No warm-ups yet. Add from the library, or tap reset for everyday bodyweight basics.</p>`));
+        const wuCtx = {
+          redraw:()=>{ dirty = true; draw(); },
+          markDirty:()=>{ dirty = true; },
+          isOpen:(idx)=> idx===openWuIdx,
+          toggleOpen:(idx)=>{ openWuIdx = openWuIdx===idx ? -1 : idx; openIdx = -1; draw(); }
+        };
+        draft.warmups.forEach((row, idx)=> wuBox.appendChild(warmupRowEditor(row, idx, draft, wuCtx)));
+
         q('[data-add]',body).onclick = ()=> openExercisePicker({
           title:`Add to ${DAY_LABELS[dayKey]}`,
           exclude: draft.exercises.map(r=>r.exerciseId),
@@ -1052,8 +1124,29 @@ function openDayEditor(dayKey){
             dirty = true; draw();
           }
         });
+        q('[data-add-wu]',body).onclick = ()=> openWarmupPicker({
+          title:'Add warm-up',
+          excludeTitles: draft.warmups.map(w=>(w.title||'').toLowerCase()),
+          onPick:(libItem)=>{
+            draft.warmups.push(newWarmupRowFromLibrary(libItem));
+            openWuIdx = draft.warmups.length-1;
+            dirty = true; draw();
+          }
+        });
+        q('[data-suggest-wu]',body).onclick = ()=>{
+          const apply = ()=>{
+            draft.warmups = basicWarmupsForDay();
+            openWuIdx = -1;
+            dirty = true; draw();
+            showToast('Warm-ups reset to basics');
+          };
+          if(draft.warmups.length)
+            confirmAction('Reset warm-ups to everyday bodyweight basics? Your current list will be replaced.', 'Reset', apply);
+          else apply();
+        };
         q('[data-copy]',body).onclick = ()=> openCopyDaySheet(dayKey, draft, draw);
         q('[data-save]',body).onclick = ()=>{
+          draft.warmups = (draft.warmups||[]).map(normalizeWarmupRow).filter(Boolean);
           DATA.splits[splitKey].days[dayKey] = draft;
           const refreshed = splitKey===DATA.activeSplit && syncActiveWorkoutFromSplit({dayKey, fromSave:true});
           saveData(DATA);
@@ -1074,14 +1167,99 @@ function openDayEditor(dayKey){
   draw();
 }
 
+function warmupRowSummary(row){
+  const bits = [];
+  if(row.detail) bits.push(row.detail);
+  if(row.minutes) bits.push(`~${row.minutes} min`);
+  return bits.join(' · ') || 'Tap to edit';
+}
+
+function warmupRowEditor(row, idx, draft, ctx){
+  const isOpen = ctx.isOpen(idx);
+  if(!row.howTo) row.howTo = resolveWarmupHowTo(row);
+  const node = el(`
+    <div class="plan-row wu-howto-scope ${isOpen?'open':''}">
+      <div class="plan-head" data-toggle role="button" tabindex="0" aria-expanded="${isOpen}">
+        <span class="plan-idx">${idx+1}</span>
+        <div class="plan-copy">
+          <div class="nm">${escapeHtml(row.title||'Warm-up')}</div>
+          <div class="plan-summary" data-summary>${escapeHtml(warmupRowSummary(row))}</div>
+        </div>
+        <span class="plan-chev" aria-hidden="true">${icon('chevronDown',18)}</span>
+        ${row.howTo ? warmupHowToButtonHtml() : ''}
+      </div>
+      ${warmupHowToBodyHtml(row.howTo)}
+      <div class="plan-body">
+        <div class="plan-metrics wu">
+          <div class="wu-name"><label>Name</label><input data-field="title" value="${escapeHtml(row.title||'')}" placeholder="e.g. Glute bridges"></div>
+          <div><label>Dose</label><input data-field="detail" value="${escapeHtml(row.detail||'')}" placeholder="2×15"></div>
+          <div><label>Min</label><input type="number" min="1" max="15" inputmode="numeric" data-field="minutes" value="${row.minutes||2}"></div>
+        </div>
+        <div class="field" style="margin:0 0 10px;"><label>How to</label>
+          <textarea data-field="howTo" rows="3" placeholder="Short description of how to do this warm-up">${escapeHtml(row.howTo||'')}</textarea>
+        </div>
+        <div class="plan-tools">
+          <button class="iconbtn" data-up ${idx===0?'disabled':''} title="Move up" aria-label="Move up">${icon('chevronUp',16)}</button>
+          <button class="iconbtn" data-down ${idx===draft.warmups.length-1?'disabled':''} title="Move down" aria-label="Move down">${icon('chevronDown',16)}</button>
+          <button class="iconbtn" data-duplicate title="Duplicate" aria-label="Duplicate">${icon('copy',16)}</button>
+          <button class="iconbtn danger" data-remove title="Remove" aria-label="Remove">${icon('trash',16)} <span>Remove</span></button>
+        </div>
+      </div>
+    </div>`);
+  const head = q('[data-toggle]',node);
+  head.onclick = (e)=>{
+    if(e.target.closest('[data-howto-toggle]')) return;
+    ctx.toggleOpen(idx);
+  };
+  head.onkeydown = (e)=>{
+    if(e.target!==head || (e.key!=='Enter' && e.key!==' ')) return;
+    e.preventDefault(); ctx.toggleOpen(idx);
+  };
+  const titleEl = q('.nm',node);
+  const summaryEl = q('[data-summary]',node);
+  const refreshHead = ()=>{
+    titleEl.textContent = row.title || 'Warm-up';
+    summaryEl.textContent = warmupRowSummary(row);
+  };
+  qa('input[data-field], textarea[data-field]',node).forEach(input=> input.oninput = ()=>{
+    const field = input.dataset.field;
+    if(field==='title' || field==='detail' || field==='howTo'){ row[field] = input.value; ctx.markDirty(); refreshHead(); return; }
+    if(field==='minutes'){
+      const n = parseInt(input.value,10);
+      row.minutes = Number.isFinite(n) ? Math.min(15, Math.max(1, n)) : 2;
+      ctx.markDirty();
+      refreshHead();
+    }
+  });
+  const swap = (a,b)=>{
+    const tmp = draft.warmups[a]; draft.warmups[a] = draft.warmups[b]; draft.warmups[b] = tmp;
+    ctx.redraw();
+  };
+  q('[data-up]',node).onclick = ()=> idx>0 && swap(idx, idx-1);
+  q('[data-down]',node).onclick = ()=> idx<draft.warmups.length-1 && swap(idx, idx+1);
+  q('[data-duplicate]',node).onclick = ()=>{
+    draft.warmups.splice(idx+1, 0, newWarmupRow({ title:row.title, detail:row.detail, minutes:row.minutes, howTo:row.howTo }));
+    ctx.redraw();
+  };
+  q('[data-remove]',node).onclick = ()=>{
+    draft.warmups.splice(idx,1);
+    ctx.redraw();
+  };
+  bindWarmupHowTo(node);
+  return node;
+}
+
 /* "3 × 8–12 · RPE 8 · 1:30 rest" — the collapsed row's one-line summary. */
-function planRowSummary(row, metric){
-  const range = row.repsMin===row.repsMax ? `${row.repsMin}` : `${row.repsMin}–${row.repsMax}`;
-  const bits = [`${row.sets} × ${range}${metric==='time'?'s':''}`];
+function planRowSummary(row, metric, ex){
+  const range = isMinuteHold(ex)
+    ? formatHoldRange(row.repsMin, row.repsMax)
+    : formatRepRange(row.repsMin, row.repsMax) + (metric==='time'?'s':'');
+  const bits = [`${row.sets} × ${range}`];
   if(row.rpe!=null) bits.push(`RPE ${row.rpe}`);
   const rest = restSecondsFor(row);
   const m = Math.floor(rest/60), s = rest%60;
   bits.push(rest===0 ? 'no rest' : rest<60 ? `${rest}s rest` : s ? `${m}:${String(s).padStart(2,'0')} rest` : `${m} min rest`);
+  if(hasLoadField(metric) && row.loadStep > 0) bits.push(`${row.loadStep} kg jumps`);
   if(row.oftenDoneAsDropSet) bits.push('drop set');
   return bits.join(' · ');
 }
@@ -1104,21 +1282,25 @@ function planRowEditor(row, idx, draft, ctx, opts){
         <span class="plan-idx">${idx+1}</span>
         <div class="plan-copy">
           <div class="nm">${escapeHtml(ex ? ex.name : 'Unknown exercise')}</div>
-          <div class="plan-summary" data-summary>${escapeHtml(planRowSummary(row, metric))}</div>
+          <div class="plan-summary" data-summary>${escapeHtml(planRowSummary(row, metric, ex))}</div>
         </div>
         <span class="plan-chev" aria-hidden="true">${icon('chevronDown',18)}</span>
       </div>
       <div class="plan-body">
       ${ex ? `<div class="plan-sub">${escapeHtml(exerciseSubtitle(ex))}</div>` : ''}
-      <div class="plan-metrics">
+      <div class="plan-metrics${isMinuteHold(ex)?' hold':''}">
         <div><label>Sets</label><input type="number" min="1" inputmode="numeric" value="${row.sets}" data-field="sets"></div>
-        <div><label>${metric==='time'?'Min sec':'Min reps'}</label><input type="number" min="1" inputmode="numeric" value="${row.repsMin}" data-field="repsMin"></div>
-        <div><label>${metric==='time'?'Max sec':'Max reps'}</label><input type="number" min="1" inputmode="numeric" value="${row.repsMax}" data-field="repsMax"></div>
+        ${isMinuteHold(ex) ? `
+        <div class="plan-hold"><label>Min hold</label>${holdFieldsHtml(row.repsMin, {minAttr:'data-hold-field="repsMin" data-hold-part="min"', secAttr:'data-hold-field="repsMin" data-hold-part="sec"'})}</div>
+        <div class="plan-hold"><label>Max hold</label>${holdFieldsHtml(row.repsMax, {minAttr:'data-hold-field="repsMax" data-hold-part="min"', secAttr:'data-hold-field="repsMax" data-hold-part="sec"'})}</div>`
+        : `<div><label>${metric==='time'?'Min sec':'Min reps'}</label><input type="number" min="1" inputmode="numeric" value="${row.repsMin}" data-field="repsMin"></div>
+        <div><label>${metric==='time'?'Max sec':'Max reps'}</label><input type="number" min="1" inputmode="numeric" value="${row.repsMax}" data-field="repsMax"></div>`}
         <div><label>RPE</label><input type="number" min="5" max="10" step="0.5" inputmode="decimal" value="${row.rpe!=null?row.rpe:''}" data-field="rpe" placeholder="—"></div>
       </div>
-      <div class="plan-extra">
+      <div class="plan-extra${hasLoadField(metric)?' load':''}">
         <div class="field" style="margin:0;"><label>Note</label><input value="${escapeHtml(row.notes||'')}" data-field="notes" placeholder="e.g. slow negatives"></div>
         <div class="field" style="margin:0;"><label>Rest (sec)</label><input type="number" min="0" inputmode="numeric" value="${row.restSeconds!=null?row.restSeconds:''}" data-field="restSeconds" placeholder="${defaultRestSeconds()}"></div>
+        ${hasLoadField(metric) ? `<div class="field" style="margin:0;"><label>Weight jump (kg)</label><input type="number" min="0.5" max="50" step="0.5" inputmode="decimal" value="${row.loadStep!=null?row.loadStep:''}" data-field="loadStep" placeholder="${loadStepFor(ex)}"></div>` : ''}
       </div>
       <label class="plan-drop">
         <span>Often done as a drop set <span class="hint">· hint only</span></span>
@@ -1139,7 +1321,7 @@ function planRowEditor(row, idx, draft, ctx, opts){
     </div>`);
 
   const summary = q('[data-summary]',node);
-  const refreshSummary = ()=>{ summary.textContent = planRowSummary(row, metric); };
+  const refreshSummary = ()=>{ summary.textContent = planRowSummary(row, metric, ex); };
   const head = q('[data-toggle]',node);
   head.onclick = (e)=>{ if(!e.target.closest('.plan-check')) ctx.toggleOpen(idx); };
   head.onkeydown = (e)=>{
@@ -1164,9 +1346,24 @@ function planRowEditor(row, idx, draft, ctx, opts){
       row.restSeconds = raw==='' ? null : Math.max(0, parseInt(raw,10)||0);
       markDirty(); refreshSummary(); return;
     }
+    if(field==='loadStep'){
+      const raw = input.value.trim();
+      if(raw===''){ row.loadStep = null; markDirty(); refreshSummary(); return; }
+      const value = parseFloat(raw);
+      row.loadStep = (!isNaN(value) && value > 0) ? Math.min(50, roundTo(value, 2)) : null;
+      markDirty(); refreshSummary(); return;
+    }
     const value = parseInt(input.value,10);
     if(isNaN(value) || value<1) return;
     row[field] = value; markDirty(); refreshSummary();
+  });
+  qa('input[data-hold-field]',node).forEach(input=> input.oninput = ()=>{
+    const field = input.dataset.holdField;
+    const minEl = q(`input[data-hold-field="${field}"][data-hold-part="min"]`,node);
+    const secEl = q(`input[data-hold-field="${field}"][data-hold-part="sec"]`,node);
+    const read = readHoldFields(minEl, secEl);
+    if(!read) return;
+    row[field] = read.duration; markDirty(); refreshSummary();
   });
   const swapRows = (a,b)=>{
     const tmp = draft.exercises[a]; draft.exercises[a] = draft.exercises[b]; draft.exercises[b] = tmp;
@@ -1205,7 +1402,7 @@ function openCopyDaySheet(sourceKey, draft, onDone){
   openSheet({
     root:SHEET_ROOT.picker, zIndex:150, title:`Copy ${DAY_LABELS[sourceKey]}`,
     build:(body, sheet)=>{
-      body.appendChild(el(`<p class="faint small" style="margin-bottom:12px;">Copies what's on screen right now (name, exercises, sets, reps, RPE and notes) onto another day. That day is saved immediately.</p>`));
+      body.appendChild(el(`<p class="faint small" style="margin-bottom:12px;">Copies what's on screen right now (name, exercises, warm-ups, sets, reps, RPE and notes) onto another day. That day is saved immediately.</p>`));
       DAY_ORDER.filter(dk=>dk!==sourceKey).forEach(dk=>{
         const target = splitDays()[dk];
         const item = el(`
@@ -1326,6 +1523,287 @@ function paintLibrary(container, redraw){
   });
 }
 
+/* ------------------------------ Warm-up library ------------------------------ */
+let openWarmupMuscle = null;
+let warmupLibrarySearch = '';
+function openWarmupLibrarySheet(){
+  openSheet({
+    title:'Warm-up library',
+    build:(body)=>{
+      const header = el(`
+        <div class="row between" style="margin-bottom:12px;">
+          <p class="faint small" style="margin:0;">${(DATA.warmupLibrary||[]).length} bodyweight warm-ups. Built-in ones can be edited; only ones you added can be deleted.</p>
+          <button class="btn ghost" data-add>＋ Add</button>
+        </div>`);
+      body.appendChild(header);
+      body.appendChild(el(searchFieldHtml('warmupLibrarySearch','Search warm-ups or muscles…', warmupLibrarySearch)));
+      const results = el(`<div></div>`);
+      body.appendChild(results);
+      const redraw = ()=> paintWarmupLibrary(results, redraw);
+      q('[data-add]',header).onclick = ()=> openWarmupFormSheet({onSaved:()=>{ openWarmupMuscle = null; redraw(); }});
+      redraw();
+      const input = q('#warmupLibrarySearch',body);
+      input.oninput = ()=>{ warmupLibrarySearch = input.value; redraw(); };
+    },
+    onClosed:()=>{ warmupLibrarySearch=''; openWarmupMuscle=null; renderApp(); }
+  });
+}
+function warmupLibraryRow(item, redraw){
+  const row = el(`
+    <div class="ex-list-item">
+      <div style="min-width:0;">
+        <div>${escapeHtml(item.title)}</div>
+        <div class="meta">${escapeHtml(warmupSubtitle(item))}</div>
+      </div>
+      <button class="btn ghost" data-view>View →</button>
+    </div>`);
+  q('[data-view]',row).onclick = ()=> openWarmupDetailSheet(item.id, {root:SHEET_ROOT.picker, zIndex:150, onClosed:redraw});
+  return row;
+}
+function paintWarmupLibrary(container, redraw){
+  container.innerHTML = '';
+  const term = warmupLibrarySearch.trim();
+  const lib = DATA.warmupLibrary || [];
+  if(term){
+    const hits = searchWarmups(term, lib);
+    if(hits.length){
+      const card = el(`<div class="card flat" style="padding:6px 14px;"></div>`);
+      hits.forEach(w=> card.appendChild(warmupLibraryRow(w, redraw)));
+      container.appendChild(card);
+    } else {
+      const box = el(`
+        <div class="notfound">
+          <p>No match for "${escapeHtml(term)}".</p>
+          <button class="btn secondary" data-add>＋ Add "${escapeHtml(term)}" to warm-ups</button>
+        </div>`);
+      q('[data-add]',box).onclick = ()=> openWarmupFormSheet({
+        prefillTitle:term,
+        onSaved:()=>{ warmupLibrarySearch=''; redraw(); }
+      });
+      container.appendChild(box);
+    }
+    return;
+  }
+  REGION_ORDER.forEach(region=>{
+    const muscles = MUSCLES.filter(m=>MUSCLE_REGION[m]===region && lib.some(w=>(w.primary||'Other')===m));
+    if(!muscles.length) return;
+    container.appendChild(el(`<div class="region-label">${region}</div>`));
+    muscles.forEach(muscle=>{
+      const list = warmupsForMuscle(muscle);
+      const isOpen = openWarmupMuscle===muscle;
+      const head = el(`
+        <div class="accordion-head" style="margin-bottom:${isOpen?'0':'10px'}">
+          <span style="font-weight:700;">${escapeHtml(muscle)}</span>
+          <span class="faint small">${list.length} ${isOpen?'▲':'▼'}</span>
+        </div>`);
+      head.onclick = ()=>{ openWarmupMuscle = isOpen ? null : muscle; redraw(); };
+      container.appendChild(head);
+      if(isOpen){
+        const body = el(`<div class="accordion-body" style="margin-bottom:10px;"></div>`);
+        list.forEach(w=> body.appendChild(warmupLibraryRow(w, redraw)));
+        container.appendChild(body);
+      }
+    });
+  });
+}
+function openWarmupDetailSheet(warmupId, opts){
+  opts = opts || {};
+  const item = getWarmupLibraryItem(warmupId);
+  if(!item) return;
+  openSheet({
+    root: opts.root, zIndex: opts.zIndex, onClosed: opts.onClosed,
+    title: item.title,
+    build:(body, sheet)=>{
+      body.appendChild(el(`
+        <div class="wu-howto-scope">
+          <div class="wu-detail-top">
+            <div style="min-width:0;">${tagsHtml([item.primary||'Other', item.detail||'', item.minutes?`~${item.minutes} min`:''].filter(Boolean))}</div>
+            ${item.howTo ? warmupHowToButtonHtml() : ''}
+          </div>
+          ${warmupHowToBodyHtml(item.howTo)}
+          <p class="faint small" style="margin:10px 0 14px;">Bodyweight warm-up. Add it to a day’s warm-up list from the Split day editor.</p>
+          <div class="row" style="gap:8px;">
+            <button class="btn secondary" data-edit style="flex:1;">${icon('pencil',18)} Edit</button>
+            ${item.userAdded ? '<button class="btn danger" data-delete style="flex:1;">Delete</button>' : ''}
+          </div>
+        </div>`));
+      bindWarmupHowTo(body);
+      q('[data-edit]',body).onclick = ()=> openWarmupFormSheet({
+        item,
+        onSaved:()=>{ openWarmupDetailSheet(warmupId, opts); renderApp(); }
+      });
+      const del = q('[data-delete]',body);
+      if(del) del.onclick = ()=>{
+        confirmAction('Delete this warm-up from your library?', 'Delete', ()=>{
+          DATA.warmupLibrary = (DATA.warmupLibrary||[]).filter(w=>w.id!==item.id);
+          saveData(DATA);
+          sheet.close();
+          if(opts.onClosed) opts.onClosed();
+          showToast('Warm-up deleted');
+          renderApp();
+        });
+      };
+    }
+  });
+}
+function openWarmupFormSheet(opts){
+  opts = opts || {};
+  const item = opts.item || null;
+  const isEdit = !!item;
+  const primary0 = item ? (item.primary||'Other') : (opts.prefillMuscle || 'Other');
+  openSheet({
+    root:SHEET_ROOT.form, zIndex:200,
+    title: isEdit ? 'Edit warm-up' : 'Add a warm-up',
+    build:(body, sheet)=>{
+      body.appendChild(el(`
+        <div>
+          <p class="faint small" style="margin-bottom:12px;">Keep it bodyweight — no bands or machines. It joins your Warm-up library for any day.</p>
+          <div class="field"><label>Name</label><input id="wuName" placeholder="e.g. Glute bridges" value="${escapeHtml(item?item.title:(opts.prefillTitle||''))}"></div>
+          <div class="grid2">
+            <div class="field"><label>Dose</label><input id="wuDetail" placeholder="2×12" value="${escapeHtml(item?(item.detail||''):'')}"></div>
+            <div class="field"><label>Minutes</label><input id="wuMinutes" type="number" min="1" max="15" inputmode="numeric" value="${item?item.minutes:2}"></div>
+          </div>
+          <div class="field">${choiceFieldHtml({id:'wuPrimary', label:'Main muscle', value:primary0, display:primary0})}</div>
+          <div class="field"><label>How to</label>
+            <textarea id="wuHowTo" rows="4" placeholder="Describe how to do this warm-up">${escapeHtml(item?(item.howTo||''):'')}</textarea>
+          </div>
+          <button class="btn" data-save style="width:100%;">${isEdit?'Save changes':'Add to library'}</button>
+          ${isEdit && item.userAdded ? '<button class="btn danger" data-delete style="width:100%;margin-top:10px;">Delete this warm-up</button>' : ''}
+        </div>`));
+      bindChoiceField(q('#wuPrimary',body), {
+        title:'Main muscle',
+        options:()=> MUSCLES.map(m=>({value:m, label:m})),
+        root:SHEET_ROOT.picker, zIndex:220
+      });
+      q('[data-save]',body).onclick = ()=>{
+        const title = q('#wuName',body).value.trim();
+        if(!title){ showToast('Give it a name'); return; }
+        const detail = q('#wuDetail',body).value.trim();
+        const howTo = q('#wuHowTo',body).value.trim();
+        const minutes = Math.min(15, Math.max(1, parseInt(q('#wuMinutes',body).value,10)||2));
+        const primary = choiceFieldValue(q('#wuPrimary',body)) || 'Other';
+        const dup = (DATA.warmupLibrary||[]).some(w=>
+          w.title.toLowerCase()===title.toLowerCase() && (!isEdit || w.id!==item.id));
+        if(dup){ showToast('You already have that warm-up'); return; }
+        let savedId;
+        if(isEdit){
+          Object.assign(item, {title, detail, minutes, primary, howTo});
+          savedId = item.id;
+          showToast('Warm-up updated');
+        } else {
+          const created = makeWarmupLibraryItem({title, detail, minutes, primary, howTo}, {id:uid(), userAdded:true});
+          DATA.warmupLibrary.push(created);
+          savedId = created.id;
+          showToast('Added to Warm-up library');
+        }
+        saveData(DATA);
+        sheet.close();
+        if(opts.onSaved) opts.onSaved(savedId);
+        renderApp();
+      };
+      const del = q('[data-delete]',body);
+      if(del) del.onclick = ()=>{
+        confirmAction('Delete this warm-up from your library?', 'Delete', ()=>{
+          DATA.warmupLibrary = (DATA.warmupLibrary||[]).filter(w=>w.id!==item.id);
+          saveData(DATA);
+          sheet.close();
+          showToast('Warm-up deleted');
+          renderApp();
+        });
+      };
+    }
+  });
+}
+function openWarmupPicker(opts){
+  opts = opts || {};
+  const excluded = new Set(opts.excludeTitles || []);
+  let muscle = null, term = '';
+
+  function paintList(container, sheet){
+    container.innerHTML = '';
+    const lib = DATA.warmupLibrary || [];
+    if(!muscle && !term.trim()){
+      const counts = {};
+      lib.forEach(w=>{ const m=w.primary||'Other'; counts[m]=(counts[m]||0)+1; });
+      REGION_ORDER.forEach(region=>{
+        const muscles = MUSCLES.filter(m=>MUSCLE_REGION[m]===region && counts[m]);
+        if(!muscles.length) return;
+        container.appendChild(el(`<div class="region-label">${region}</div>`));
+        const grid = el(`<div class="pick-grid"></div>`);
+        muscles.forEach(m=>{
+          const tile = el(`<button class="pick-tile">${escapeHtml(m)}<span class="cnt">${counts[m]} warm-ups · ${escapeHtml(MUSCLE_HINT[m]||'')}</span></button>`);
+          tile.onclick = ()=>{ muscle = m; draw(); };
+          grid.appendChild(tile);
+        });
+        container.appendChild(grid);
+      });
+      const missing = el(`
+        <div class="notfound" style="margin-top:14px;">
+          <p>Want something custom?</p>
+          <button class="btn secondary" data-new>＋ Add a warm-up to the library</button>
+        </div>`);
+      q('[data-new]',missing).onclick = ()=> openWarmupFormSheet({
+        onSaved:(id)=>{
+          const w = getWarmupLibraryItem(id);
+          if(w){ sheet.close(); opts.onPick(w); }
+        }
+      });
+      container.appendChild(missing);
+      return;
+    }
+    const pool = (muscle ? lib.filter(w=>(w.primary||'Other')===muscle) : lib)
+      .filter(w=> !excluded.has((w.title||'').toLowerCase()));
+    const results = searchWarmups(term, pool);
+    if(!results.length) container.appendChild(el(`<p class="empty">Nothing matches that${muscle?` in ${escapeHtml(muscle)}`:''}.</p>`));
+    results.forEach(w=>{
+      const row = el(`
+        <div class="pick-item">
+          <div style="min-width:0;">
+            <div class="nm">${escapeHtml(w.title)}</div>
+            <div class="sub">${escapeHtml(warmupSubtitle(w))}</div>
+          </div>
+          <span class="btn ghost" style="flex:0 0 auto;">Add +</span>
+        </div>`);
+      row.onclick = ()=>{ sheet.close(); opts.onPick(w); };
+      container.appendChild(row);
+    });
+    const missing = el(`
+      <div class="notfound">
+        <p>Can't find what you're looking for?</p>
+        <button class="btn secondary" data-new>＋ Add ${term.trim()?`"${escapeHtml(term.trim())}"`:'a warm-up'} to the library</button>
+      </div>`);
+    q('[data-new]',missing).onclick = ()=> openWarmupFormSheet({
+      prefillTitle: term.trim(), prefillMuscle: muscle||'Other',
+      onSaved:(id)=>{
+        const w = getWarmupLibraryItem(id);
+        if(w){ sheet.close(); opts.onPick(w); }
+      }
+    });
+    container.appendChild(missing);
+  }
+
+  function draw(){
+    openSheet({
+      root:SHEET_ROOT.picker, zIndex:150,
+      title: muscle || opts.title || 'Add warm-up',
+      onBack: muscle ? ()=>{ muscle=null; term=''; draw(); } : null,
+      build:(body, sheet)=>{
+        body.appendChild(el(`
+          <div>
+            ${muscle ? '' : '<p class="faint small" style="margin-bottom:12px;">Pick a muscle, then choose a bodyweight warm-up.</p>'}
+            ${searchFieldHtml('wuPickSearch', muscle?`Search in ${muscle}…`:'Search all warm-ups…', term)}
+            <div data-list></div>
+          </div>`));
+        const list = q('[data-list]',body);
+        paintList(list, sheet);
+        const search = q('#wuPickSearch',body);
+        search.oninput = ()=>{ term = search.value; paintList(list, sheet); };
+      }
+    });
+  }
+  draw();
+}
+
 function sessionBestValue(sets, metric){
   const higher = betterIsHigher(metric);
   const normal = sets.filter(s=>!s.isDropSet);
@@ -1339,12 +1817,12 @@ function sessionBestValue(sets, metric){
   if(metric==='time')        return best.duration;
   return best.weight; // assisted
 }
-function sessionChipText(sets, metric){
+function sessionChipText(sets, metric, ex){
   const value = sessionBestValue(sets, metric);
   if(value==null) return '🔻 Drop set';
   if(metric==='weight_reps' || metric==='weighted_bw') return `e1RM ${value}${units()}`;
   if(metric==='reps_only')   return `${value} reps`;
-  if(metric==='time')        return `${value}s`;
+  if(metric==='time')        return isMinuteHold(ex) ? formatHoldAmount(value) : `${value}s`;
   return `${value}${units()} assist`;
 }
 
@@ -1415,7 +1893,7 @@ function openExerciseDetailSheet(exerciseId, opts){
                 <strong>${formatLogDate(session.date)}</strong> ${session.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
                 <div class="faint small">${session.sets.map(s=>setValueText(s,metric)).join(', ')}</div>
               </div>
-              <span class="chip">${sessionChipText(session.sets, metric)}</span>
+              <span class="chip">${sessionChipText(session.sets, metric, ex)}</span>
             </div>
           </div>`));
       });
@@ -1424,13 +1902,15 @@ function openExerciseDetailSheet(exerciseId, opts){
       if(canvas && window.Chart){
         const ordered = [...sessions].reverse();
         const styles = getComputedStyle(document.documentElement);
+        const minute = isMinuteHold(ex);
         const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
           : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
-          : metric==='reps_only' ? 'Best reps' : metric==='time' ? 'Best hold (s)' : `Assistance used (${units()})`;
+          : metric==='reps_only' ? 'Best reps' : metric==='time' ? (minute ? 'Best hold (min)' : 'Best hold (s)') : `Assistance used (${units()})`;
+        const chartValue = v=> (minute && metric==='time' && v!=null) ? roundTo(v/60, 2) : v;
         new Chart(canvas.getContext('2d'), {
           type:'line',
           data:{ labels: ordered.map(s=>s.date.slice(5)),
-                 datasets:[{label:axisLabel, data: ordered.map(s=>sessionBestValue(s.sets, metric)),
+                 datasets:[{label:axisLabel, data: ordered.map(s=>chartValue(sessionBestValue(s.sets, metric))),
                    borderColor: styles.getPropertyValue('--primary').trim()||'#e1ff00', backgroundColor:'transparent', tension:.3, pointRadius:4}] },
           options:{ responsive:true,
             plugins:{legend:{labels:{color:styles.getPropertyValue('--text-dim').trim()}}},
@@ -1529,7 +2009,7 @@ function prSignedText(n, suffix){
   const v = roundTo(Math.abs(n));
   return `${n>0?'+':'−'}${v}${suffix}`;
 }
-function prDeltaText(prev, cur, metric){
+function prDeltaText(prev, cur, metric, ex){
   if(!prev) return 'First PR';
   const a = prev.set, b = cur.set, parts = [];
   const reps = (n)=> prSignedText(n, Math.abs(n)===1 ? ' rep' : ' reps');
@@ -1542,7 +2022,7 @@ function prDeltaText(prev, cur, metric){
     if(dr) parts.push(reps(dr));
   } else {
     const dd = (b.duration||0)-(a.duration||0);
-    if(dd) parts.push(prSignedText(dd, 's'));
+    if(dd) parts.push(isMinuteHold(ex) ? formatHoldDelta(dd) : prSignedText(dd, 's'));
   }
   return parts.length ? parts.join(' · ') : 'Matched';
 }
@@ -1553,15 +2033,15 @@ function prChartPoint(moment, metric){
   if(metric==='time') return set.duration;
   return set.weight;
 }
-function prOverallGain(moments, metric){
+function prOverallGain(moments, metric, ex){
   if(moments.length<2) return {value:'—', label:'Progress'};
   const first = prChartPoint(moments[0], metric), last = prChartPoint(moments[moments.length-1], metric);
   if(metric==='weight_reps' || metric==='weighted_bw') return {value:prSignedText(last-first, ` ${units()}`), label:'Est. 1RM gain'};
   if(metric==='reps_only')   return {value:prSignedText(last-first, ''), label:'Reps gained'};
-  if(metric==='time')        return {value:prSignedText(last-first, 's'), label:'Hold gained'};
+  if(metric==='time') return {value: isMinuteHold(ex) ? formatHoldDelta(last-first) : prSignedText(last-first, 's'), label:'Hold gained'};
   return {value:prSignedText(last-first, ` ${units()}`), label:'Assist change'};
 }
-function renderPrLogTree(moments, metric, rerender){
+function renderPrLogTree(moments, metric, rerender, ex){
   const shared = {open:prTreeOpen, unit:'PR', rerender};
   const newest = moments[0];
   const days = (parent, rows)=> rows.forEach(moment=>{
@@ -1570,7 +2050,7 @@ function renderPrLogTree(moments, metric, rerender){
       <div class="hist-day pr-row${moment===newest?' current':''}">
         <div class="pr-when">
           <strong>${escapeHtml(prDayLabel(moment.date))}</strong>
-          <div class="faint small">${moment===newest?'<span class="trophy">🏆</span> Current · ':''}${escapeHtml(prDeltaText(moments[idx+1], moment, metric))}</div>
+          <div class="faint small">${moment===newest?'<span class="trophy">🏆</span> Current · ':''}${escapeHtml(prDeltaText(moments[idx+1], moment, metric, ex))}</div>
         </div>
         <span class="pr-val">${escapeHtml(formatPrValue(moment.set, metric))}</span>
       </div>`));
@@ -1604,12 +2084,13 @@ function openRecordsPrSheet(exerciseId){
         body.appendChild(el(`<p class="empty">No PRs yet for this movement.</p>`));
         return;
       }
-      const gain = prOverallGain(moments, metric);
+      const gain = prOverallGain(moments, metric, ex);
       const sinceDays = daysInclusive(current.date, todayKey()) - 1;
       const oneRm = (metric==='weight_reps' || metric==='weighted_bw') ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
+      const minute = isMinuteHold(ex);
       const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
         : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
-        : metric==='reps_only' ? 'Best reps' : metric==='time' ? 'Longest hold (s)' : `Assistance (${units()}) · lower is better`;
+        : metric==='reps_only' ? 'Best reps' : metric==='time' ? (minute ? 'Longest hold (min)' : 'Longest hold (s)') : `Assistance (${units()}) · lower is better`;
       body.appendChild(el(`
         <div>
           <div class="hero-card pr-hero">
@@ -1635,12 +2116,15 @@ function openRecordsPrSheet(exerciseId){
       const list = q('[data-prs]',body);
       const drawLog = ()=>{
         list.innerHTML = '';
-        list.appendChild(renderPrLogTree(moments.slice().reverse(), metric, drawLog));
+        list.appendChild(renderPrLogTree(moments.slice().reverse(), metric, drawLog, ex));
       };
       drawLog();
       const canvas = q('[data-chart]',body);
       if(canvas){
-        const points = moments.map(m=> prChartPoint(m, metric));
+        const points = moments.map(m=> {
+          const v = prChartPoint(m, metric);
+          return minute ? roundTo(v/60, 2) : v;
+        });
         const lo = Math.min(...points), hi = Math.max(...points);
         const pad = (hi-lo)*0.25 || hi*0.1 || 1;
         try{
@@ -1649,7 +2133,7 @@ function openRecordsPrSheet(exerciseId){
             labels: moments.map(m=>{ const d = parseDateKey(m.date); return `${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}`; }),
             data: points,
             yMin: Math.max(0, Math.floor(lo-pad)), yMax: Math.ceil(hi+pad),
-            unit: metric==='time' ? 's' : metric==='reps_only' ? 'reps' : units()
+            unit: metric==='time' ? (minute ? 'min' : 's') : metric==='reps_only' ? 'reps' : units()
           });
           bindHistoryChart(canvas);
         }catch(err){ console.error(APP_NAME+': PR chart failed', err); }
@@ -1968,13 +2452,21 @@ function bindHistoryChart(canvas){
   canvas.onpointermove = pointAt;
   canvas.onpointerleave = ()=>{ tip.hidden = true; };
 }
+function historyRangeOptions(months){
+  return [
+    {value:'all', label:'All Time'},
+    {value:'this', label:'This Month'},
+    {value:'last', label:'Last Month'},
+    ...months.map(ym=>({value:ym, label:monthTitle(ym)}))
+  ];
+}
+function historyRangeLabel(value, months){
+  const hit = historyRangeOptions(months).find(o=>o.value===value);
+  return hit ? hit.label : 'All Time';
+}
 function historyRangeSelectHtml(months){
-  return `<select id="historyRange" aria-label="Workout summary range">
-    <option value="all" ${historyFilter==='all'?'selected':''}>All Time</option>
-    <option value="this" ${historyFilter==='this'?'selected':''}>This Month</option>
-    <option value="last" ${historyFilter==='last'?'selected':''}>Last Month</option>
-    ${months.map(ym=>`<option value="${ym}" ${historyFilter===ym?'selected':''}>${escapeHtml(monthTitle(ym))}</option>`).join('')}
-  </select>`;
+  const cur = historyFilter || 'all';
+  return choiceFieldHtml({id:'historyRange', label:null, value:cur, display:historyRangeLabel(cur, months)});
 }
 function renderHistorySummaryCard(logs, filter){
   const insight = historyInsights(logs, filter);
@@ -1999,12 +2491,16 @@ function renderHistorySummaryCard(logs, filter){
         ${insight.underNote?`<p class="faint small" style="margin-top:8px;">${escapeHtml(insight.underNote)}</p>`:''}
       </div>
     </div>`);
-  q('#historyRange', card).onchange = (e)=>{
-    historyFilter = normalizeHistoryFilter(e.target.value);
-    historyTreeOpen = {year:null, month:null, week:null};
-    pastWorkoutsOpen = false;
-    renderApp();
-  };
+  bindChoiceField(q('#historyRange', card), {
+    title:'Workout summary range',
+    options:()=> historyRangeOptions(historyMonthOptions(loggedWorkouts())),
+    onChange:(value)=>{
+      historyFilter = normalizeHistoryFilter(value);
+      historyTreeOpen = {year:null, month:null, week:null};
+      pastWorkoutsOpen = false;
+      renderApp();
+    }
+  });
   afterHistoryRender.push(()=>{
     const canvas = q('[data-chart="freq"]', card);
     if(!canvas) return;
@@ -2325,7 +2821,7 @@ function trainingGuideSections(){
         <li>Dumbbell: ${eq.dumbbell} kg · Kettlebell: ${eq.kettlebell} kg</li>
         <li>Cable or machine: ${eq.cable} kg · Weighted bodyweight: ${eq.bodyweight} kg</li>
       </ul>
-      <p>The result is rounded to that step, so a 20 kg dumbbell curl goes to ${nextLoadFor({equipment:'dumbbell', primary:'Biceps'}, 20)} kg (dumbbell weights are per hand). If your gym's jumps are different, set "Weight jump" when editing the exercise. Assisted exercises lower the assistance by ${L.assistanceStepKg} kg instead.</p>`},
+      <p>The result is rounded to that step, so a 20 kg dumbbell curl goes to ${nextLoadFor({equipment:'dumbbell', primary:'Biceps'}, 20)} kg (dumbbell weights are per hand). If your gym's jumps are different, set Weight jump on the exercise in Split (or in the library). Spotter suggestions always move at least one full jump.</p>`},
     {key:'lower', title:'When does it tell me to lower the weight?', body:`
       <p>When your reps fall below the bottom of the exercise's range, the weight is too heavy for your goal. For example, 82.5 kg × 4 when the range is 6–10.</p>
       <ul>
@@ -2358,7 +2854,7 @@ function trainingGuideSections(){
         <li><b>PRs</b> use an estimated one-rep max, so 80 kg × 10 can beat 85 kg × 6, and an extra rep at the same weight is a PR. Your first set of an exercise is the baseline; beating it earns the first trophy.</li>
       </ul>`},
     {key:'bodyweight', title:'Bodyweight and timed exercises', body:`
-      <p>There's no weight to add, so the app asks for more reps (+1, or +2 if it felt easy) or a longer hold (+10 s, or +15 s if easy). If it felt hard, just match last time.</p>`},
+      <p>There's no weight to add, so the app asks for more reps (+1, or +2 if it felt easy) or a longer hold. Plank and treadmill add a minute when the last one felt easy, and otherwise ask you to match it. Other holds add 10 seconds, or 15 if it felt easy. If it felt hard, just match last time.</p>`},
   ];
 }
 
@@ -2443,9 +2939,9 @@ function renderSettingsScreen(){
         <div class="chip ${currentTheme()==='dark'?'on':''}" data-th="dark" style="flex:1;justify-content:center;">${icon('moon',16)} Dark</div>
         <div class="chip ${currentTheme()==='light'?'on':''}" data-th="light" style="flex:1;justify-content:center;">${icon('sun',16)} Light</div>
       </div>
-      ${isAndroidApp() ? `<label class="row" style="gap:8px;margin:14px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
-        <input type="checkbox" id="fullscreen" style="width:auto;" ${DATA.settings.fullscreen?'checked':''}>
-        <span>Full screen (hide status and navigation bars)</span>
+      ${isAndroidApp() ? `<label class="row" style="gap:8px;margin:14px 0 0;align-items:flex-start;font-size:13px;color:var(--text-dim);cursor:pointer;">
+        <input type="checkbox" id="fullscreen" style="width:auto;margin-top:2px;" ${DATA.settings.fullscreen?'checked':''}>
+        <span><strong style="color:var(--text);font-weight:700;">Full screen (Android app)</strong><br><span class="faint small" style="display:inline-block;margin-top:4px;line-height:1.4;">Fills the display and hides the status and navigation bars. Swipe from the edge to peek them briefly — they hide again. Only works in the installed APK.</span></span>
       </label>` : ''}
     </div>`);
   qa('[data-th]',themeCard).forEach(chip=> chip.onclick = ()=>{ setTheme(chip.dataset.th); renderApp(); });
@@ -2457,91 +2953,100 @@ function renderSettingsScreen(){
   };
   wrap.appendChild(themeCard);
 
+  const genderOpts = [['unspecified','Prefer not to say'],['male','Male'],['female','Female']];
+  const gender0 = DATA.settings.gender || 'unspecified';
+  const genderHit = genderOpts.find(([v])=>v===gender0);
+  const genderLabel = genderHit ? genderHit[1] : 'Prefer not to say';
   const nameCard = el(`
     <div class="card">
       <div class="field"><label>Your name</label><input id="userName" value="${escapeHtml(DATA.settings.userName||DEFAULT_USER_NAME)}" placeholder="Your name"></div>
-      <div class="field" style="margin:0;"><label>Gender</label>
-        <select id="userGender">
-          ${[['unspecified','Prefer not to say'],['male','Male'],['female','Female']].map(([v,l])=>`<option value="${v}" ${DATA.settings.gender===v?'selected':''}>${l}</option>`).join('')}
-        </select>
-      </div>
+      <div class="field" style="margin:0;">${choiceFieldHtml({id:'userGender', label:'Gender', value:gender0, display:genderLabel})}</div>
     </div>`);
   q('#userName',nameCard).onchange = (e)=>{
     DATA.settings.userName = e.target.value.trim() || DEFAULT_USER_NAME;
     saveData(DATA);
   };
-  q('#userGender',nameCard).onchange = (e)=>{
-    DATA.settings.gender = GENDERS.includes(e.target.value) ? e.target.value : 'unspecified';
-    saveData(DATA);
-  };
+  bindChoiceField(q('#userGender',nameCard), {
+    title:'Gender',
+    options:()=> genderOpts.map(([value,label])=>({value, label})),
+    onChange:(value)=>{
+      DATA.settings.gender = GENDERS.includes(value) ? value : 'unspecified';
+      saveData(DATA);
+    }
+  });
   wrap.appendChild(nameCard);
 
   wrap.appendChild(el(`<div class="section-title">Body weight</div>`));
+  const weighDay0 = DATA.settings.weighInDay || DAY_ORDER[0];
   const weighCard = el(`
     <div class="card">
-      <div class="field" style="margin:0;"><label>Weekly weigh-in day</label>
-        <select id="weighInDay">
-          ${DAY_ORDER.map(dk=>`<option value="${dk}" ${DATA.settings.weighInDay===dk?'selected':''}>${DAY_LABELS[dk]}</option>`).join('')}
-        </select>
-      </div>
+      <div class="field" style="margin:0;">${choiceFieldHtml({id:'weighInDay', label:'Weekly weigh-in day', value:weighDay0, display:DAY_LABELS[weighDay0]})}</div>
       <p class="faint small" style="margin-top:10px;">Home shows a reminder on this day until you log or tap Later. Logging lives in History.</p>
     </div>`);
-  q('#weighInDay',weighCard).onchange = (e)=>{
-    DATA.settings.weighInDay = e.target.value;
-    saveData(DATA);
-    showToast('Weigh-in day set to '+DAY_LABELS[e.target.value]);
-    renderApp();
-  };
+  bindChoiceField(q('#weighInDay',weighCard), {
+    title:'Weekly weigh-in day',
+    options:()=> DAY_ORDER.map(dk=>({value:dk, label:DAY_LABELS[dk]})),
+    onChange:(value)=>{
+      DATA.settings.weighInDay = value;
+      saveData(DATA);
+      showToast('Weigh-in day set to '+DAY_LABELS[value]);
+      renderApp();
+    }
+  });
   wrap.appendChild(weighCard);
 
   /* Training: goal preset + the two overload dials that drive §5 progressionFor */
   const goal = goalConfig();
+  const goalKey0 = DATA.settings.goal;
+  const goalLabel0 = (TRAINING.goals[goalKey0]||{}).label || goalKey0;
+  const sets0 = defaultPlanSets();
   wrap.appendChild(el(`<div class="section-title">Training</div>`));
   const trainingCard = el(`
     <div class="card">
-      <div class="field"><label>Goal</label>
-        <select id="goalSelect">
-          ${Object.entries(TRAINING.goals).map(([key,g])=>`<option value="${key}" ${DATA.settings.goal===key?'selected':''}>${g.label}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Sets for new exercises</label>
-        <select id="defaultPlanSets">
-          ${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${defaultPlanSets()===n?'selected':''}>${n}</option>`).join('')}
-        </select>
+      <div class="field">${choiceFieldHtml({id:'goalSelect', label:'Goal', value:goalKey0, display:goalLabel0})}</div>
+      <div class="field">${choiceFieldHtml({id:'defaultPlanSets', label:'Sets for new exercises', value:String(sets0), display:String(sets0)})}
         <p class="faint small" style="margin-top:6px;">Used when you add an exercise to a split.</p>
       </div>
       <div class="grid2">
         <div class="field"><label>Reps before more weight</label><input id="repsToEarn" type="number" min="3" max="30" inputmode="numeric" value="${goal.repsToEarnIncrease}"></div>
         <div class="field"><label>Clean sessions needed</label><input id="sessionsNeeded" type="number" min="1" max="5" inputmode="numeric" value="${goal.sessionsRequired}"></div>
       </div>
-      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit ${goal.repsToEarnIncrease} reps (or the top of that exercise's programmed rep range, if lower), including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()} each, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}) unless an exercise has its own weight jump.</p>
+      <p class="faint small">You earn a load increase after ${goal.sessionsRequired} session${goal.sessionsRequired>1?'s':''} where ${goal.qualifyingSets} sets hit ${goal.repsToEarnIncrease} reps (or the top of that exercise's programmed rep range, if lower), including one Hard set. Increments follow equipment (barbell ${TRAINING.load.minIncrementByEquip.barbell}${units()}, dumbbell ${TRAINING.load.minIncrementByEquip.dumbbell}${units()} each, cable/machine ${TRAINING.load.minIncrementByEquip.cable}${units()}) unless you set Weight jump on the Split day or in the library.</p>
     </div>`);
-  q('#defaultPlanSets',trainingCard).onchange = (e)=>{
-    const before = defaultPlanSets();
-    const next = parseInt(e.target.value, 10);
-    DATA.settings.defaultPlanSets = next;
-    saveData(DATA);
-    const split = activeSplit();
-    const rows = Object.values(split.days || {}).flatMap(day=> (day && day.exercises) || []).filter(row=> row.sets === before);
-    if(!rows.length || before === next) return;
-    chooseAction(
-      `Also change the ${rows.length} exercise${rows.length>1?'s':''} in your ${split.label} split that ${rows.length>1?'have':'has'} ${before} set${before>1?'s':''} to ${next}?`,
-      'Update split', ()=>{
-        rows.forEach(row=>{ row.sets = next; });
-        saveData(DATA);
-        showToast(`${rows.length} exercise${rows.length>1?'s':''} now ${next} set${next>1?'s':''}`);
-        renderApp();
-      },
-      'Keep split as is');
-  };
-  q('#goalSelect',trainingCard).onchange = (e)=>{
-    const preset = TRAINING.goals[e.target.value];
-    DATA.settings.goal = e.target.value;
-    DATA.settings.overload = {repsToEarnIncrease:preset.repsToEarnIncrease, sessionsRequired:preset.sessionsRequired};
-    saveData(DATA);
-    showToast(`Goal set to ${preset.label}`);
-    renderApp();
-  };
+  bindChoiceField(q('#defaultPlanSets',trainingCard), {
+    title:'Sets for new exercises',
+    options:()=> [1,2,3,4,5,6,7,8].map(n=>({value:String(n), label:String(n)})),
+    onChange:(value)=>{
+      const before = defaultPlanSets();
+      const next = parseInt(value, 10);
+      DATA.settings.defaultPlanSets = next;
+      saveData(DATA);
+      const split = activeSplit();
+      const rows = Object.values(split.days || {}).flatMap(day=> (day && day.exercises) || []).filter(row=> row.sets === before);
+      if(!rows.length || before === next) return;
+      chooseAction(
+        `Also change the ${rows.length} exercise${rows.length>1?'s':''} in your ${split.label} split that ${rows.length>1?'have':'has'} ${before} set${before>1?'s':''} to ${next}?`,
+        'Update split', ()=>{
+          rows.forEach(row=>{ row.sets = next; });
+          saveData(DATA);
+          showToast(`${rows.length} exercise${rows.length>1?'s':''} now ${next} set${next>1?'s':''}`);
+          renderApp();
+        },
+        'Keep split as is');
+    }
+  });
+  bindChoiceField(q('#goalSelect',trainingCard), {
+    title:'Goal',
+    options:()=> Object.entries(TRAINING.goals).map(([value,g])=>({value, label:g.label})),
+    onChange:(value)=>{
+      const preset = TRAINING.goals[value];
+      DATA.settings.goal = value;
+      DATA.settings.overload = {repsToEarnIncrease:preset.repsToEarnIncrease, sessionsRequired:preset.sessionsRequired};
+      saveData(DATA);
+      showToast(`Goal set to ${preset.label}`);
+      renderApp();
+    }
+  });
   q('#repsToEarn',trainingCard).onchange = (e)=>{
     const value = parseInt(e.target.value,10);
     if(isNaN(value)||value<3) return;
@@ -2564,13 +3069,10 @@ function renderSettingsScreen(){
   wrap.appendChild(guideCard);
 
   wrap.appendChild(el(`<div class="section-title">Rest timer</div>`));
+  const restMins0 = DATA.settings.restDefaultMinutes;
   const restCard = el(`
     <div class="card">
-      <div class="field"><label>Default rest between sets</label>
-        <select id="restDefault">
-          ${[1,1.5,2,2.5,3,3.5,4,5].map(m=>`<option value="${m}" ${DATA.settings.restDefaultMinutes===m?'selected':''}>${formatMinSec(Math.round(m*60))}</option>`).join('')}
-        </select>
-      </div>
+      <div class="field">${choiceFieldHtml({id:'restDefault', label:'Default rest between sets', value:String(restMins0), display:formatMinSec(Math.round(restMins0*60))})}</div>
       <p class="faint small" style="margin-bottom:10px;">Any exercise can override this with its own rest time in the Split day editor.</p>
       <label class="row" style="gap:8px;margin:10px 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
         <input type="checkbox" id="restAutoStart" style="width:auto;" ${DATA.settings.restAutoStart?'checked':''}>
@@ -2584,17 +3086,22 @@ function renderSettingsScreen(){
         <input type="checkbox" id="restNotify" style="width:auto;" ${DATA.settings.restNotify?'checked':''}>
         <span>System notification when rest ends (over other apps)</span>
       </label>
+      <div class="field" style="margin:10px 0 0;">${choiceFieldHtml({id:'restSound', label:'Rest alert sound', value:restSoundChoice(), display:restSoundChoice()==='whistle'?'Whistle':'Phone default'})}</div>
       <label class="row" style="gap:8px;margin:10px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
         <input type="checkbox" id="restVibrate" style="width:auto;" ${DATA.settings.restVibrate?'checked':''}>
         <span>Vibrate when rest ends</span>
       </label>
-      <p class="faint small" style="margin-top:10px;">Rest complete uses your phone's default notification sound.</p>
+      <p class="faint small" style="margin-top:10px;">Phone default uses your system notification sound. Whistle plays the app whistle when rest (or a hold) ends.</p>
       ${isAndroidApp() ? `<p class="faint small" style="margin-top:8px;">If the alert is late or missing with the screen off: Settings → Apps → ${escapeHtml(APP_NAME)} → Battery → Unrestricted. Also allow Alarms &amp; reminders if Android shows it.</p>
       <button class="btn secondary" data-allow-rest style="width:100%;margin-top:10px;">Allow rest alerts</button>` : ''}
     </div>`);
-  q('#restDefault',restCard).onchange = (e)=>{
-    DATA.settings.restDefaultMinutes = parseFloat(e.target.value); saveData(DATA); renderApp();
-  };
+  bindChoiceField(q('#restDefault',restCard), {
+    title:'Default rest between sets',
+    options:()=> [1,1.5,2,2.5,3,3.5,4,5].map(m=>({value:String(m), label:formatMinSec(Math.round(m*60))})),
+    onChange:(value)=>{
+      DATA.settings.restDefaultMinutes = parseFloat(value); saveData(DATA); renderApp();
+    }
+  });
   q('#restNotify',restCard).onchange = async (e)=>{
     DATA.settings.restNotify = e.target.checked; saveData(DATA);
     if(e.target.checked){
@@ -2605,6 +3112,23 @@ function renderSettingsScreen(){
       else if(isAndroidApp()) await runRestAlertSetup();
     }
   };
+  bindChoiceField(q('#restSound',restCard), {
+    title:'Rest alert sound',
+    options:()=> [
+      {value:'default', label:'Phone default'},
+      {value:'whistle', label:'Whistle'}
+    ],
+    onChange: async (value)=>{
+      DATA.settings.restSound = value==='whistle' ? 'whistle' : 'default';
+      saveData(DATA);
+      previewRestSound(DATA.settings.restSound);
+      if(DATA.settings.restNotify){
+        await ensureRestNotifyPermission();
+        rescheduleActiveRestNotifications();
+      }
+      showToast(DATA.settings.restSound==='whistle' ? 'Rest alerts will use the whistle' : 'Rest alerts will use the phone default sound');
+    }
+  });
   const allowRest = q('[data-allow-rest]', restCard);
   if(allowRest) allowRest.onclick = async ()=>{
     DATA.settings.restNotify = true;
@@ -2630,6 +3154,15 @@ function renderSettingsScreen(){
     </div>`);
   q('[data-manage]',libCard).onclick = openLibrarySheet;
   wrap.appendChild(libCard);
+
+  wrap.appendChild(el(`<div class="section-title">Warm-up library</div>`));
+  const wuLibCard = el(`
+    <div class="card">
+      <p class="small muted">Bodyweight warm-ups only — no bands or machines. Everyday basics land on each training day; pick extras here when you edit a Split day.</p>
+      <button class="btn secondary" data-manage-wu style="width:100%;margin-top:10px;">Manage warm-ups (${(DATA.warmupLibrary||[]).length})</button>
+    </div>`);
+  q('[data-manage-wu]',wuLibCard).onclick = openWarmupLibrarySheet;
+  wrap.appendChild(wuLibCard);
 
   wrap.appendChild(el(`<div class="section-title">Reset data</div>`));
   const resetCard = el(`

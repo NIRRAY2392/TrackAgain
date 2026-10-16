@@ -1,8 +1,8 @@
 /* ============================ §1 CONFIG ============================ */
 const APP_NAME = "TrackA'gain";
 /* Stamped by the release script (trackagain-capacitor-project/trackagain/release.ps1); don't edit by hand. */
-const APP_VERSION = '1.4.0';
-const APP_BUILD = 5;
+const APP_VERSION = '1.5.0';
+const APP_BUILD = 6;
 const SITE_URL = 'https://nirray2392.github.io/TrackAgain/';
 const UPDATE_URL = SITE_URL + 'version.json';
 const STORAGE_KEY = 'liftlog_data_v2'; // legacy key — renaming would wipe saved workouts
@@ -43,7 +43,7 @@ const TRAINING = {
     assistanceStepKg: 2.5,
     maxEffortToQualify: 2.4,     // 2 medium + 1 hard (2.33) still qualifies
     newLoadRepGrace: 2,          // right after a weight increase, this many reps under the range is still "stay"
-    minIncrementByEquip: {barbell:2.5, dumbbell:2.5, kettlebell:4, cable:2.5, machine:2.5, smith:2.5, band:1, bodyweight:2.5, other:2.5}
+    minIncrementByEquip: {barbell:2.5, dumbbell:2.5, kettlebell:4, cable:5, machine:5, smith:2.5, band:1, bodyweight:2.5, other:2.5}
   },
   lowRepWarningBelow: 7          // reps < 7 (i.e. the ≤6 strength bucket) trigger the warning
 };
@@ -53,6 +53,89 @@ const DAY_ORDER = ['mon','tue','wed','thu','fri','sat','sun'];
 const DAY_LABELS = {sun:'Sunday',mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:'Thursday',fri:'Friday',sat:'Saturday'};
 const EFFORT_LABELS = {easy:'Easy', med:'Medium', hard:'Hard'};
 const EFFORT_SCORE = {easy:1, med:2, hard:3};
+
+/* Everyday bodyweight basics (~9 min) — same list for every training day. No bands/tools. */
+const WARMUP_BASICS = [
+  { title:'Easy march or arm circles', detail:'Raise your pulse', minutes:3, primary:'Other',
+    howTo:'March in place or swing your arms in big easy circles. Breathe steadily and stay relaxed — just raise your heart rate a little, not a sprint.' },
+  { title:'Cat-cow', detail:'6–8 slow', minutes:2, primary:'Abs',
+    howTo:'On hands and knees, round your back toward the ceiling (cat), then tip your pelvis and lift your chest (cow). Move slowly with your breath. Soft elbows, no forcing the stretch.' },
+  { title:'Bodyweight squat + leg swings', detail:'10 each', minutes:2, primary:'Quads',
+    howTo:'Do ~10 easy bodyweight squats — sit back, heels down, knees tracking over toes. Then hold a wall or stand tall and swing one leg forward/back ~10 times each side. Keep it loose and controlled.' },
+  { title:'Scap push-ups or wall slides', detail:'2×8–10', minutes:2, primary:'Shoulders',
+    howTo:'Scap push-ups: in a plank or knee plank, lock your elbows and only move the shoulder blades — sink them together, then push the floor away. Or face a wall, arms in a goal-post shape, and slide them up and down while keeping contact with the wall.' }
+];
+/* Full bodyweight warm-up catalog for the Warm-up library (no bands/tools). */
+const WARMUP_LIBRARY_SEED = [
+  { title:'Easy march or arm circles', detail:'Raise your pulse', minutes:3, primary:'Other',
+    howTo:'March in place or swing your arms in big easy circles. Breathe steadily and stay relaxed — just raise your heart rate a little, not a sprint.' },
+  { title:'Light walk in place', detail:'2 min', minutes:2, primary:'Other',
+    howTo:'Walk in place at an easy pace. Swing your arms naturally. You should be able to talk — this is only to wake the body up.' },
+  { title:'Jumping jacks', detail:'30–45s easy', minutes:2, primary:'Other',
+    howTo:'Jump feet out while raising arms overhead, then back in. Keep landings soft. Go easy for 30–45 seconds; stop if it feels like a workout.' },
+  { title:'Scap push-ups', detail:'2×10 easy', minutes:2, primary:'Chest',
+    howTo:'Hold a plank or knee plank with straight elbows. Only move the shoulder blades: squeeze them together, then push the floor away to round the upper back. Arms stay locked.' },
+  { title:'Easy push-ups', detail:'2×8–12', minutes:2, primary:'Chest',
+    howTo:'Hands under shoulders, body in a straight line (knees down is fine). Lower with control and press up without rushing. Stop well before failure — this is a warm-up.' },
+  { title:'Arm circles', detail:'10–15 each way', minutes:2, primary:'Shoulders',
+    howTo:'Stand tall, arms out to the sides. Draw small then larger circles forward, then reverse. Keep shoulders down away from your ears.' },
+  { title:'Wall slides', detail:'2×10', minutes:2, primary:'Shoulders',
+    howTo:'Back and arms against a wall, elbows bent like a goal post. Slide arms up as far as you can without ribs flaring or losing wall contact, then slide back down.' },
+  { title:'Cuff circles', detail:'10 each way', minutes:1, primary:'Shoulders',
+    howTo:'Elbows bent ~90° at your sides. Rotate the forearms in small circles as if drawing with your fists. Slow and smooth — warm the shoulder joint, don’t swing hard.' },
+  { title:'Diamond push-up holds', detail:'2×20–30s easy', minutes:2, primary:'Triceps',
+    howTo:'Hands close so thumbs and index fingers form a diamond under your chest. Lower a little or stay in a high plank and hold. Breathe; exit before it shakes hard.' },
+  { title:'Close-grip push-ups', detail:'2×6–10 easy', minutes:2, primary:'Triceps',
+    howTo:'Hands narrower than shoulders, elbows tracking close to your ribs. Lower and press with control. Knees down is fine — keep reps easy.' },
+  { title:'Dead hang', detail:'2×20–30s', minutes:2, primary:'Lats',
+    howTo:'Hang from a bar with a comfortable grip, arms straight, shoulders gently active (not fully shrugged into your ears). Breathe and relax the legs. Drop early if grip fails.' },
+  { title:'Scap pull-ups', detail:'2×8–10', minutes:2, primary:'Lats',
+    howTo:'Hang from a bar with straight elbows. Only move the shoulder blades: pull them down and back to lift the body a little, then return to a dead hang. Arms stay straight the whole time.' },
+  { title:'Prone Y-raises', detail:'2×12', minutes:2, primary:'Upper Back',
+    howTo:'Lie face down, arms in a Y overhead, thumbs up. Lift arms a few inches off the floor by squeezing the upper back, then lower slowly. Chin tucked, glutes lightly on.' },
+  { title:'Prone T-Y-W', detail:'6–8 each', minutes:2, primary:'Upper Back',
+    howTo:'Face down. Lift into a T (arms out), then Y (arms up), then W (elbows bent by your sides). Small lifts, squeeze the mid-back, and keep the neck long.' },
+  { title:'Reverse snow angels', detail:'2×10 slow', minutes:2, primary:'Upper Back',
+    howTo:'Lie face down, arms by your sides. Sweep them out and up overhead along the floor (or hovering), then back down — like a snow angel in reverse. Move slowly and keep contact light.' },
+  { title:'Prone rear-delt raises', detail:'2×12', minutes:2, primary:'Rear Delts',
+    howTo:'Face down, arms out in a T, thumbs up or palms down. Lift the arms by squeezing the rear shoulders, then lower. Tiny range is fine — feel the back of the shoulders work.' },
+  { title:'Face-down W holds', detail:'2×20s', minutes:2, primary:'Rear Delts',
+    howTo:'Lie face down, elbows bent into a W, thumbs pointing up. Lift elbows and hands slightly and hold. Squeeze the rear delts and mid-back; keep the forehead lightly on the floor or a towel.' },
+  { title:'Empty-hand curl pumps', detail:'2×15 easy', minutes:2, primary:'Biceps',
+    howTo:'Stand tall with empty hands. Curl your fists up toward your shoulders, then lower them. Squeeze gently at the top and keep your elbows by your sides. No equipment.' },
+  { title:'Wrist circles + grip squeezes', detail:'60s', minutes:1, primary:'Forearms',
+    howTo:'Circle both wrists slowly each way, then make fists and squeeze hard for a second and release. Keep shoulders relaxed. About a minute total is enough.' },
+  { title:'Bodyweight squats', detail:'2×10 easy', minutes:2, primary:'Quads',
+    howTo:'Feet about shoulder-width. Sit the hips back and down, chest up, then stand. Heels stay down. Move smoothly — these are warm-up reps, not a max set.' },
+  { title:'Bodyweight squat + leg swings', detail:'10 each', minutes:2, primary:'Quads',
+    howTo:'Do ~10 easy bodyweight squats — sit back, heels down, knees tracking over toes. Then hold a wall or stand tall and swing one leg forward/back ~10 times each side. Keep it loose and controlled.' },
+  { title:'Walking lunges (bodyweight)', detail:'10 each leg', minutes:2, primary:'Quads',
+    howTo:'Step forward into a lunge, both knees ~90°, then push to the next step. Torso upright, front knee over mid-foot. Short steps are fine; stay easy.' },
+  { title:'Leg swings', detail:'10 each way', minutes:2, primary:'Hamstrings',
+    howTo:'Hold a wall for balance. Swing one leg forward and back like a pendulum, then side to side if space allows. Loose hips, no forcing the end range.' },
+  { title:'Bodyweight good mornings', detail:'2×10 slow', minutes:2, primary:'Hamstrings',
+    howTo:'Soft knees, hands on hips or behind your head. Hinge at the hips, push them back, keep a flat back, then stand tall by squeezing the glutes. Move slowly.' },
+  { title:'Hip hinge drills', detail:'8–10', minutes:2, primary:'Hamstrings',
+    howTo:'Practice pushing the hips back with a flat back and soft knees — as if closing a car door with your hips. Feel a stretch in the hamstrings, then return to standing. No weight needed.' },
+  { title:'Glute bridges', detail:'2×12', minutes:2, primary:'Glutes',
+    howTo:'Lie on your back, knees bent, feet flat. Drive through the heels to lift the hips, squeeze the glutes at the top, then lower with control. Don’t over-arch the low back.' },
+  { title:'Single-leg glute bridge', detail:'8 each side', minutes:2, primary:'Glutes',
+    howTo:'Same as a glute bridge, but one foot stays planted and the other leg is bent or extended. Push through the working heel, keep hips level, and switch sides.' },
+  { title:'Ankle circles + calf raises', detail:'2×15', minutes:2, primary:'Calves',
+    howTo:'Circle each ankle slowly both ways, then rise onto the balls of your feet and lower. Hold a wall if needed. Easy range — warm the ankles and calves.' },
+  { title:'Cat-cow', detail:'6–8 slow', minutes:2, primary:'Abs',
+    howTo:'On hands and knees, round your back toward the ceiling (cat), then tip your pelvis and lift your chest (cow). Move slowly with your breath. Soft elbows, no forcing the stretch.' },
+  { title:'Cat-cow + dead bug', detail:'6–8 each', minutes:2, primary:'Abs',
+    howTo:'Do a few slow cat-cows, then lie on your back. Arms up, knees bent over hips. Lower opposite arm and leg toward the floor without the low back arching, then switch.' },
+  { title:'Dead bug', detail:'6–8 each side', minutes:2, primary:'Abs',
+    howTo:'On your back, arms toward the ceiling, knees bent over hips. Press the low back gently into the floor. Extend opposite arm and leg slowly, return, then switch. Breathe out as you extend.' },
+  { title:'Bird dog', detail:'6 each side', minutes:2, primary:'Abs',
+    howTo:'On hands and knees, reach one arm forward and the opposite leg back. Keep hips square and spine long. Pause briefly, return, then switch. Move slow — no wobbling for speed.' },
+  { title:'Cat-cow + bird dog', detail:'6 each side', minutes:2, primary:'Lower Back',
+    howTo:'A few slow cat-cows to loosen the spine, then bird dogs: opposite arm and leg reach long while hips stay level. Soft and controlled.' },
+  { title:'Cat-cow + hip hinge drills', detail:'8–10', minutes:2, primary:'Lower Back',
+    howTo:'Start with slow cat-cows on all fours. Stand and practice easy hip hinges — hips back, flat back, soft knees — then stand tall. Wake the hinge pattern before loading.' }
+];
 const METRIC_LABELS = { weight_reps:'Weight & reps', weighted_bw:'Bodyweight + added weight', reps_only:'Bodyweight reps', time:'Timed hold', assisted:'Assisted (lower is better)' };
 const MOTIVATIONAL_QUOTES = [
   "Strong is a skill. You practice it every time you show up.",

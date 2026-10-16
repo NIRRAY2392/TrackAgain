@@ -39,9 +39,184 @@ function newPlanRow(exerciseId, opts){
     exerciseId, sets:defaultPlanSets(),
     repsMin: timed?30:(compound?Math.max(4, goal.repsMin-2):goal.repsMin),
     repsMax: timed?60:(compound?goal.repsMax-2:goal.repsMax),
-    rpe:null, notes:'', restSeconds:null,
+    rpe:null, notes:'', restSeconds:null, loadStep:null,
     supersetId:null, oftenDoneAsDropSet:false
   };
+}
+function warmupLibraryIdFromTitle(title){
+  const slug = String(title||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  return slug ? 'wu-'+slug : 'wu-'+uid();
+}
+function makeWarmupLibraryItem(seed, opts){
+  const s = seed || {};
+  const o = opts || {};
+  const title = (typeof s.title==='string' && s.title.trim()) ? s.title.trim() : 'Warm-up';
+  const primaryRaw = o.primary!=null ? o.primary : s.primary;
+  const primary = MUSCLES.includes(primaryRaw) ? primaryRaw : 'Other';
+  const howToRaw = o.howTo!=null ? o.howTo : s.howTo;
+  return {
+    id: o.id || s.id || warmupLibraryIdFromTitle(title),
+    title,
+    detail: typeof s.detail==='string' ? s.detail : '',
+    minutes: Math.min(15, Math.max(1, Math.round(Number(s.minutes)||2))),
+    primary,
+    howTo: typeof howToRaw==='string' ? howToRaw : '',
+    userAdded: !!o.userAdded
+  };
+}
+function seedWarmupLibrary(){
+  return WARMUP_LIBRARY_SEED.map(s=> makeWarmupLibraryItem(s, {userAdded:false}));
+}
+function warmupSeedByKey(){
+  const map = {};
+  WARMUP_LIBRARY_SEED.forEach(seed=>{
+    const id = warmupLibraryIdFromTitle(seed.title);
+    map[id] = seed;
+    map[(seed.title||'').trim().toLowerCase()] = seed;
+  });
+  return map;
+}
+function ensureWarmupLibrary(data){
+  if(!data) return [];
+  if(!Array.isArray(data.warmupLibrary)) data.warmupLibrary = [];
+  const seeds = warmupSeedByKey();
+  data.warmupLibrary = data.warmupLibrary.map(w=>{
+    if(!w || typeof w!=='object') return null;
+    const seed = seeds[String(w.id||'').toLowerCase()] || seeds[(w.title||'').trim().toLowerCase()];
+    /* Built-ins missing howTo pick it up from the seed on migrate. */
+    const howTo = (typeof w.howTo==='string' && w.howTo.trim())
+      ? w.howTo
+      : (seed && seed.howTo) || '';
+    return makeWarmupLibraryItem(Object.assign({}, w, {howTo}), {
+      id: w.id || warmupLibraryIdFromTitle(w.title),
+      userAdded: !!w.userAdded
+    });
+  }).filter(Boolean);
+  const known = new Set();
+  data.warmupLibrary.forEach(w=>{
+    known.add((w.title||'').trim().toLowerCase());
+    known.add(String(w.id||'').toLowerCase());
+  });
+  WARMUP_LIBRARY_SEED.forEach(seed=>{
+    const titleKey = (seed.title||'').trim().toLowerCase();
+    const id = warmupLibraryIdFromTitle(seed.title);
+    if(known.has(titleKey) || known.has(id.toLowerCase())) return;
+    data.warmupLibrary.push(makeWarmupLibraryItem(seed, {id, userAdded:false}));
+    known.add(titleKey);
+    known.add(id.toLowerCase());
+  });
+  return data.warmupLibrary;
+}
+function getWarmupLibraryItem(id){
+  return ((DATA && DATA.warmupLibrary) || []).find(w=>w && w.id===id) || null;
+}
+function warmupsForMuscle(muscle){
+  return ((DATA && DATA.warmupLibrary) || []).filter(w=> (w.primary||'Other')===muscle)
+    .sort((a,b)=> a.title.localeCompare(b.title));
+}
+function searchWarmups(term, pool){
+  const q = String(term||'').trim().toLowerCase();
+  const list = pool || ((DATA && DATA.warmupLibrary) || []);
+  if(!q) return list.slice().sort((a,b)=> a.title.localeCompare(b.title));
+  return list.filter(w=>{
+    const hay = [w.title, w.detail, w.howTo, w.primary, MUSCLE_REGION[w.primary]||''].join(' ').toLowerCase();
+    return hay.includes(q);
+  }).sort((a,b)=> a.title.localeCompare(b.title));
+}
+function warmupSubtitle(w){
+  if(!w) return '';
+  const bits = [];
+  if(w.detail) bits.push(w.detail);
+  if(w.minutes) bits.push(`~${w.minutes} min`);
+  if(w.primary && w.primary!=='Other') bits.push(w.primary);
+  return bits.join(' · ');
+}
+function resolveWarmupHowTo(row){
+  if(!row) return '';
+  if(typeof row.howTo==='string' && row.howTo.trim()) return row.howTo.trim();
+  if(row.libraryId){
+    const lib = getWarmupLibraryItem(row.libraryId);
+    if(lib && lib.howTo) return String(lib.howTo).trim();
+  }
+  const seed = (typeof warmupSeedByKey==='function' ? warmupSeedByKey() : {})[(row.title||'').trim().toLowerCase()];
+  return seed && seed.howTo ? String(seed.howTo).trim() : '';
+}
+function newWarmupRow(partial){
+  const p = partial || {};
+  const row = {
+    id: p.id || uid(),
+    title: (typeof p.title==='string' && p.title.trim()) ? p.title.trim() : 'Warm-up',
+    detail: typeof p.detail==='string' ? p.detail : '',
+    minutes: Math.min(15, Math.max(1, Math.round(Number(p.minutes)||2))),
+    howTo: typeof p.howTo==='string' ? p.howTo : ''
+  };
+  if(p.libraryId) row.libraryId = p.libraryId;
+  return row;
+}
+function newWarmupRowFromLibrary(item){
+  if(!item) return newWarmupRow({});
+  return newWarmupRow({
+    title: item.title,
+    detail: item.detail,
+    minutes: item.minutes,
+    howTo: item.howTo || '',
+    libraryId: item.id
+  });
+}
+function normalizeWarmupRow(row){
+  if(!row || typeof row!=='object') return null;
+  const next = newWarmupRow(row);
+  if(!next.howTo) next.howTo = resolveWarmupHowTo(row);
+  return next;
+}
+function warmupNeedsGear(row){
+  const text = `${row && row.title || ''} ${row && row.detail || ''}`;
+  return /\b(bands?|barbells?|dumbbells?|kettlebells?|cables?|machines?|pushdowns?|smith)\b/i.test(text);
+}
+function replaceGearWarmups(list, hasExercises){
+  const rows = (list||[]).map(normalizeWarmupRow).filter(Boolean);
+  if(!rows.some(warmupNeedsGear)) return rows;
+  return hasExercises ? basicWarmupsForDay() : rows.filter(w=>!warmupNeedsGear(w));
+}
+function warmupsMinutes(warmups){
+  return (warmups||[]).reduce((sum,w)=> sum + (w && w.minutes ? w.minutes : 0), 0);
+}
+/* Everyday bodyweight basics — same short list for every training day. */
+function basicWarmupsForDay(){
+  return WARMUP_BASICS.map(b=> newWarmupRow({
+    title: b.title,
+    detail: b.detail,
+    minutes: b.minutes,
+    howTo: b.howTo || '',
+    libraryId: warmupLibraryIdFromTitle(b.title)
+  }));
+}
+/* Kept name for older call sites / mental model; always returns everyday basics. */
+function suggestWarmupsForExercises(){
+  return basicWarmupsForDay();
+}
+function ensureDayWarmups(day, exercises, seedIfMissing){
+  if(!day) return day;
+  if(!Array.isArray(day.exercises)) day.exercises = [];
+  if(!Array.isArray(day.warmups)){
+    day.warmups = (seedIfMissing!==false && day.exercises.length)
+      ? basicWarmupsForDay()
+      : [];
+  } else {
+    day.warmups = day.warmups.map(normalizeWarmupRow).filter(Boolean);
+  }
+  if(day.warmups.some(warmupNeedsGear)){
+    day.warmups = day.exercises.length ? basicWarmupsForDay() : day.warmups.filter(w=>!warmupNeedsGear(w));
+  }
+  return day;
+}
+function ensureSplitWarmups(split, exercises){
+  if(!split || !split.days) return split;
+  DAY_KEYS.forEach(dk=>{
+    if(!split.days[dk]) split.days[dk] = {name:'Rest', exercises:[], warmups:[]};
+    ensureDayWarmups(split.days[dk], exercises, true);
+  });
+  return split;
 }
 
 function seedSplits(exercises){
@@ -49,7 +224,7 @@ function seedSplits(exercises){
   const rows = (names, compoundReps, isoReps) => names.map((n,i)=>{
     const id = idOf(n); if(!id) return null;
     const r = i<2 ? compoundReps : isoReps;
-    return { exerciseId:id, sets:3, repsMin:r[0], repsMax:r[1], rpe:null, notes:'', supersetId:null, oftenDoneAsDropSet:false };
+    return { exerciseId:id, sets:3, repsMin:r[0], repsMax:r[1], rpe:null, notes:'', restSeconds:null, loadStep:null, supersetId:null, oftenDoneAsDropSet:false };
   }).filter(Boolean);
   const push  = ['Bench Press','Incline Barbell Press','Overhead Press','Lateral Raise','Triceps Pushdown'];
   const pull  = ['Deadlift','Pull-up','Barbell Row','Face Pull','Barbell Curl'];
@@ -58,18 +233,17 @@ function seedSplits(exercises){
   const upper = ['Bench Press','Barbell Row','Overhead Press','Barbell Curl','Triceps Pushdown','Lateral Raise'];
   const lower = ['Squat','Romanian Deadlift','Leg Press','Leg Curl','Calf Raise'];
   const C=[6,10], I=[10,15];
-  return {
-    ppl: { label:'PPL', days:{
-      mon:{name:'Push', exercises:rows(push,C,I)}, tue:{name:'Pull', exercises:rows(pull,C,I)}, wed:{name:'Legs', exercises:rows(legs,C,I)},
-      thu:{name:'Push', exercises:rows(push,C,I)}, fri:{name:'Pull', exercises:rows(pull,C,I)}, sat:{name:'Legs', exercises:rows(legs,C,I)},
-      sun:{name:'Rest', exercises:[]}
-    }},
-    pplul: { label:'PPL + UL', days:{
-      mon:{name:'Push', exercises:rows(push,C,I)}, tue:{name:'Pull', exercises:rows(pull,C,I)}, wed:{name:'Legs', exercises:rows(legs,C,I)},
-      thu:{name:'Core & Cardio', exercises:rows(core,[12,20],[12,20])}, fri:{name:'Upper', exercises:rows(upper,C,I)},
-      sat:{name:'Lower', exercises:rows(lower,C,I)}, sun:{name:'Rest', exercises:[]}
-    }}
-  };
+  const ppl = { label:'PPL', days:{
+    mon:{name:'Push', exercises:rows(push,C,I)}, tue:{name:'Pull', exercises:rows(pull,C,I)}, wed:{name:'Legs', exercises:rows(legs,C,I)},
+    thu:{name:'Push', exercises:rows(push,C,I)}, fri:{name:'Pull', exercises:rows(pull,C,I)}, sat:{name:'Legs', exercises:rows(legs,C,I)},
+    sun:{name:'Rest', exercises:[]}
+  }};
+  const pplul = { label:'PPL + UL', days:{
+    mon:{name:'Push', exercises:rows(push,C,I)}, tue:{name:'Pull', exercises:rows(pull,C,I)}, wed:{name:'Legs', exercises:rows(legs,C,I)},
+    thu:{name:'Core & Cardio', exercises:rows(core,[12,20],[12,20])}, fri:{name:'Upper', exercises:rows(upper,C,I)},
+    sat:{name:'Lower', exercises:rows(lower,C,I)}, sun:{name:'Rest', exercises:[]}
+  }};
+  return { ppl: ensureSplitWarmups(ppl, exercises), pplul: ensureSplitWarmups(pplul, exercises) };
 }
 
 /* God's Plan (PPL-UL): the split new installs start on, and a built-in preset.
@@ -84,7 +258,7 @@ function godsPlanRow(exercises, name, sets, repsMin, repsMax, restSeconds, notes
   if(!ex) return null;
   return {
     exerciseId:ex.id, sets, repsMin, repsMax, rpe:null,
-    notes:notes||'', restSeconds, supersetId:supersetId||null, oftenDoneAsDropSet:false
+    notes:notes||'', restSeconds, loadStep:null, supersetId:supersetId||null, oftenDoneAsDropSet:false
   };
 }
 function buildGodsPlanSplit(exercises){
@@ -143,7 +317,7 @@ function buildGodsPlanSplit(exercises){
     ].filter(Boolean)},
     sun:{name:'Rest', exercises:[]}
   };
-  return { label:"God's Plan", days };
+  return ensureSplitWarmups({ label:"God's Plan", days }, exercises);
 }
 
 /* Presets every install gets. Deleting one records its id in
@@ -153,7 +327,7 @@ const BUILTIN_PRESETS = [
   {id:'builtin-ppl',       name:'PPL',        subtitle:'Push, pull, legs, twice a week',        build:ex=> seedSplits(ex).ppl},
   {id:'builtin-pplul',     name:'PPL + UL',   subtitle:'Push, pull, legs, core, upper, lower',  build:ex=> seedSplits(ex).pplul}
 ];
-const PRESETS_VERSION = 3;
+const PRESETS_VERSION = 4;
 function ensureBuiltinPresets(data){
   data.presets = data.presets || [];
   const s = data.settings = data.settings || {};
@@ -207,7 +381,7 @@ function defaultSettings(){
   const goal = TRAINING.goals.hypertrophy;
   return { units:'kg', userName:DEFAULT_USER_NAME, goal:'hypertrophy',
     overload:{ repsToEarnIncrease:goal.repsToEarnIncrease, sessionsRequired:goal.sessionsRequired },
-    restDefaultMinutes:3, restNotify:true, restVibrate:true, restAutoStart:true, keepScreenOn:true, fullscreen:true,
+    restDefaultMinutes:3, restNotify:true, restSound:'default', restVibrate:true, restAutoStart:true, keepScreenOn:true, fullscreen:true,
     restSetupAsked:false, restBatteryHintDismissed:false,
     weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], presetsVersion:0,
     defaultPlanSets:2, onboarded:false, gender:'unspecified', weightedBwMigrated:true };
@@ -216,7 +390,10 @@ const GENDERS = ['unspecified','male','female'];
 function defaultSplits(exercises){ return { main: buildGodsPlanSplit(exercises) }; }
 function defaultData(){
   const exercises = seedExercises();
-  const data = { settings:defaultSettings(), exercises, splits:defaultSplits(exercises), activeSplit:'main', logs:[], progress:{}, bodyWeight:[], presets:[] };
+  const data = {
+    settings:defaultSettings(), exercises, warmupLibrary:seedWarmupLibrary(),
+    splits:defaultSplits(exercises), activeSplit:'main', logs:[], progress:{}, bodyWeight:[], presets:[]
+  };
   ensureBuiltinPresets(data);
   return data;
 }
@@ -232,6 +409,7 @@ function migrate(data){
   if(!data.splits || !Object.keys(data.splits).length) data.splits = defaultSplits(data.exercises);
   if(!data.activeSplit || !data.splits[data.activeSplit]) data.activeSplit = Object.keys(data.splits)[0];
   if(!data.progress) data.progress = {};
+  ensureWarmupLibrary(data);
   if(!Array.isArray(data.presets)) data.presets = [];
   data.presets = data.presets.filter(p=>p && p.split && p.split.days);
   data.presets.forEach(p=>{
@@ -254,6 +432,7 @@ function migrate(data){
   if(typeof s.overload.sessionsRequired !== 'number') s.overload.sessionsRequired = preset.sessionsRequired;
   if(typeof s.restDefaultMinutes !== 'number') s.restDefaultMinutes = 3;
   if(typeof s.restNotify !== 'boolean') s.restNotify = true;
+  if(s.restSound!=='whistle' && s.restSound!=='default') s.restSound = 'default';
   if(typeof s.restVibrate !== 'boolean') s.restVibrate = true;
   if(typeof s.restAutoStart !== 'boolean') s.restAutoStart = true;
   if(typeof s.keepScreenOn !== 'boolean') s.keepScreenOn = true;
@@ -337,7 +516,7 @@ function migrate(data){
   /* split rows */
   Object.values(data.splits).forEach(split=>{
     DAY_KEYS.forEach(dk=>{
-      if(!split.days[dk]) split.days[dk] = {name:'Rest', exercises:[]};
+      if(!split.days[dk]) split.days[dk] = {name:'Rest', exercises:[], warmups:[]};
       if(!Array.isArray(split.days[dk].exercises)) split.days[dk].exercises = [];
       split.days[dk].exercises.forEach(row=>{
         if(typeof row.rpe === 'undefined') row.rpe = null;
@@ -347,9 +526,11 @@ function migrate(data){
         if(!row.repsMin) row.repsMin = 8;
         if(!row.repsMax) row.repsMax = 12;
         if(typeof row.restSeconds === 'undefined') row.restSeconds = null; // null = use the global default
+        if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
         if(typeof row.supersetId === 'undefined') row.supersetId = null;
         if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
       });
+      ensureDayWarmups(split.days[dk], data.exercises, true);
     });
   });
 
@@ -383,8 +564,15 @@ function migrate(data){
       if(typeof row.supersetId === 'undefined') row.supersetId = null;
       if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
       if(typeof row.restSeconds === 'undefined') row.restSeconds = null;
+      if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
       if(typeof row.sessionOnly !== 'boolean') row.sessionOnly = false;
     });
+    if(Array.isArray(log.warmups)){
+      const hadGear = log.warmups.some(warmupNeedsGear);
+      log.warmups = replaceGearWarmups(log.warmups, true);
+      if(hadGear) log.warmupDone = [];
+    } else log.warmups = null;
+    if(!Array.isArray(log.warmupDone)) log.warmupDone = [];
     log.queued.forEach(row=>{
       if(typeof row.sessionOnly !== 'boolean') row.sessionOnly = true;
     });
@@ -393,7 +581,9 @@ function migrate(data){
   (data.presets||[]).forEach(p=>{
     if(!p.split || !p.split.days) return;
     DAY_KEYS.forEach(dk=>{
-      (p.split.days[dk] && p.split.days[dk].exercises || []).forEach(row=>{
+      if(!p.split.days[dk]) return;
+      if(!Array.isArray(p.split.days[dk].exercises)) p.split.days[dk].exercises = [];
+      (p.split.days[dk].exercises || []).forEach(row=>{
         if(typeof row.rpe === 'undefined') row.rpe = null;
         if(typeof row.notes !== 'string') row.notes = '';
         upgradeWarmupNote(row);
@@ -401,9 +591,11 @@ function migrate(data){
         if(!row.repsMin) row.repsMin = 8;
         if(!row.repsMax) row.repsMax = 12;
         if(typeof row.restSeconds === 'undefined') row.restSeconds = null;
+        if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
         if(typeof row.supersetId === 'undefined') row.supersetId = null;
         if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
       });
+      ensureDayWarmups(p.split.days[dk], data.exercises, true);
     });
   });
   collapseToSingleSplit(data);
