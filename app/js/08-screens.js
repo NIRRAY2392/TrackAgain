@@ -274,7 +274,8 @@ function startWorkout(){
   const log = persistLog(todayLog());
   // Copy the split as it is now. A plan left over from before Start
   // would ignore split edits made while no workout was running.
-  if(!log.startedAt){
+  // A swapped day is re-copied from its dayKey. A custom session is kept.
+  if(!log.startedAt && !log.customSession){
     log.plan = null;
     log.warmups = null;
     log.warmupDone = [];
@@ -323,8 +324,14 @@ function renderLanding(){
   const plan = planForLog(log);
   const trainedToday = log.sets.length>0;
   const last = lastCompletedWorkout();
-  const subtitle = plan.length
-    ? `${activeSplit().label} · ${planNameForLog(log)} day · ${plan.length} exercises planned`
+  const sessionName = planNameForLog(log);
+  const swapped = !log.customSession && log.dayKey && log.dayKey!==weekdayKey();
+  const subtitle = log.customSession && !plan.length
+    ? 'Custom session — add exercises once you start'
+    : plan.length
+    ? `${activeSplit().label} · ${sessionName} day · ${plan.length} exercises planned`
+    : swapped
+    ? `${activeSplit().label} · ${sessionName} · rest day`
     : 'Scheduled rest day — recovery is part of the plan';
 
   const hero = el(`
@@ -379,35 +386,39 @@ function renderLanding(){
     wrap.appendChild(remind);
   }
 
-  if(plan.length){
-    let n = 0;
-    const rowHtml = (row, inSuperset)=>{
-      n++;
-      const ex = getExercise(row.exerciseId);
-      const done = setsInLogFor(log,row.exerciseId).length>0;
-      const range = formatRepRange(row.repsMin, row.repsMax);
-      const target = isMinuteHold(ex) ? `${row.sets} × ${formatHoldRange(row.repsMin, row.repsMax)}`
-        : `${row.sets} × ${range}${metricOf(ex)==='time' ? 's' : ''}`;
-      return `
-        <div class="hl-row${done?' done':''}">
-          <span class="hl-idx">${done ? icon('check',14) : n}</span>
-          <span class="hl-name">${escapeHtml(ex ? ex.name : '?')}${inSuperset ? `<span class="hl-link" title="Superset" aria-label="Superset">${icon('link',13)}</span>` : ''}</span>
-          <span class="hl-target">${target}</span>
-        </div>`;
-    };
-    const rows = groupPlanRows(plan).map(g=> g.type==='single'
-      ? rowHtml(g.row, false)
-      : g.members.map(m=> rowHtml(m.row, g.members.length>1)).join('')
-    ).join('');
-    wrap.appendChild(el(`
-      <div class="card hl-card">
-        <div class="hl-head">
-          <p class="section-title" style="margin:0;">Today's hit list</p>
-          <span class="hl-day">${escapeHtml(planNameForLog(log))} <span class="count-pill">${plan.length}</span></span>
-        </div>
-        <div class="hl-rows">${rows}</div>
-      </div>`));
-  }
+  let n = 0;
+  const rowHtml = (row, inSuperset)=>{
+    n++;
+    const ex = getExercise(row.exerciseId);
+    const done = setsInLogFor(log,row.exerciseId).length>0;
+    const range = formatRepRange(row.repsMin, row.repsMax);
+    const target = isMinuteHold(ex) ? `${row.sets} × ${formatHoldRange(row.repsMin, row.repsMax)}`
+      : `${row.sets} × ${range}${metricOf(ex)==='time' ? 's' : ''}`;
+    return `
+      <div class="hl-row${done?' done':''}">
+        <span class="hl-idx">${done ? icon('check',14) : n}</span>
+        <span class="hl-name">${escapeHtml(ex ? ex.name : '?')}${inSuperset ? `<span class="hl-link" title="Superset" aria-label="Superset">${icon('link',13)}</span>` : ''}</span>
+        <span class="hl-target">${target}</span>
+      </div>`;
+  };
+  const rows = plan.length ? groupPlanRows(plan).map(g=> g.type==='single'
+    ? rowHtml(g.row, false)
+    : g.members.map(m=> rowHtml(m.row, g.members.length>1)).join('')
+  ).join('') : '';
+  const emptyNote = log.customSession
+    ? 'Nothing planned yet. Start the workout, then add exercises.'
+    : 'Rest day.';
+  const card = el(`
+    <div class="card hl-card">
+      <div class="hl-head">
+        <p class="section-title" style="margin:0;">Today's hit list</p>
+        <span class="hl-day">${escapeHtml(planNameForLog(log))}${plan.length ? ` <span class="count-pill">${plan.length}</span>` : ''}</span>
+      </div>
+      ${plan.length ? `<div class="hl-rows">${rows}</div>` : `<p class="hl-empty">${emptyNote}</p>`}
+      <button type="button" class="hl-swap" data-swap>${icon('info',16)}<span>Something else?</span></button>
+    </div>`);
+  q('[data-swap]',card).onclick = ()=> openTodaySessionSheet();
+  wrap.appendChild(card);
 
   if(trainedToday){
     const work = muscleWorkCard(log.sets, "Today's muscle work");
@@ -604,7 +615,9 @@ function renderActiveWorkout(){
   if(!plan.length){
     wrap.appendChild(el(`
       <div class="card">
-        <p class="muted">Scheduled rest day. Recovery is part of the plan — but you can still train if you want to.</p>
+        <p class="muted">${log.customSession
+          ? 'Custom session. Add the exercises you want to do today.'
+          : 'Scheduled rest day. Recovery is part of the plan — but you can still train if you want to.'}</p>
       </div>`));
   } else {
     wrap.appendChild(el(`<div class="section-title">Workout starts here</div>`));
@@ -663,7 +676,9 @@ function renderActiveWorkout(){
   const addBox = el(`
     <div class="card flat" style="text-align:center;">
       <button class="btn dashed" data-add style="width:100%;">${icon('plus',16)} Add exercise</button>
-      <p class="faint small" style="margin-top:8px;">Adds it to this workout. You can keep it on your split, or just for today.</p>
+      <p class="faint small" style="margin-top:8px;">${log.customSession
+        ? 'Adds it to this workout only.'
+        : 'Adds it to this workout. You can keep it on your split, or just for today.'}</p>
     </div>`);
   q('[data-add]',addBox).onclick = ()=> openExercisePicker({
     title:'Add exercise',
@@ -917,7 +932,7 @@ function workoutExerciseCard(planRow, index, log, opts){
           ? `<button type="button" class="btn secondary drop-btn" data-cancel-edit>Cancel</button>
              <button type="button" class="btn add-set" data-update>${icon('check',18)} Update set</button>`
           : `<button type="button" class="btn secondary drop-btn" data-drop>Log drop set</button>
-             <button type="button" class="btn add-set" data-log-now>${icon('plus',18)} Log set ${doneSets.length+1}</button>`}
+             <button type="button" class="btn add-set" data-log-now>${icon('plus',18)} ${minuteHold && !draft.warmup ? `Start ${escapeHtml(formatHoldAmount(draft.duration))}` : `Log set ${doneSets.length+1}`}</button>`}
       </div>`}
     </div>`);
 
@@ -1030,6 +1045,7 @@ function workoutExerciseCard(planRow, index, log, opts){
       input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch';
     });
     paintPreview();
+    paintLogLabel();
   };
   paintPreview();
 
@@ -1062,6 +1078,13 @@ function workoutExerciseCard(planRow, index, log, opts){
       input.style.width = (Math.max(String(input.value).length, 1) + 0.6) + 'ch';
     });
     paintPreview();
+    paintLogLabel();
+  };
+  const logNow = q('[data-log-now]',card);
+  const paintLogLabel = ()=>{
+    if(!logNow || !minuteHold) return;
+    const label = draft.warmup ? `Log set ${doneSets.length+1}` : `Start ${formatHoldAmount(draft.duration||0)}`;
+    logNow.innerHTML = `${icon('plus',18)} ${escapeHtml(label)}`;
   };
   const applyHold = (min, sec)=>{
     let m = Math.max(0, Math.round(Number(min)||0));
@@ -1130,9 +1153,8 @@ function workoutExerciseCard(planRow, index, log, opts){
     qa('[data-eff]',card).forEach(b=>{ const on = b===btn; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
   });
   const wu = q('[data-wu]',card);
-  if(wu) wu.onchange = ()=>{ draft.warmup = wu.checked; paintPreview(); };
+  if(wu) wu.onchange = ()=>{ draft.warmup = wu.checked; paintPreview(); paintLogLabel(); };
 
-  const logNow = q('[data-log-now]',card);
   if(logNow) logNow.onclick = ()=>{
     const values = setValuesFrom(metric, draft);
     if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
@@ -1141,7 +1163,8 @@ function workoutExerciseCard(planRow, index, log, opts){
     draft.warmup = false;
     expandedCards.clear();
     const holding = startHoldIfMinute([set]);
-    celebrateSet(set, !set.isWarmup && working.length+1===planRow.sets);
+    if(holding) hapticTick(false);
+    else celebrateSet(set, !set.isWarmup && working.length+1===planRow.sets);
     renderApp();
     if(planForLog(log).indexOf(planRow) !== before) scrollCardIntoView(planRow.exerciseId);
     if(holding) return;
@@ -1349,9 +1372,12 @@ function logSupersetRound(members, log){
     return set;
   });
   expandedCards.clear();
-  celebrateSets(logged);
+  const holding = startHoldIfMinute(logged);
+  if(holding) hapticTick(false);
+  const ready = holding ? logged.filter(s=> typeof s.holdStartedAt!=='number') : logged;
+  if(ready.length) celebrateSets(ready);
   renderApp();
-  if(startHoldIfMinute(logged)) return;
+  if(holding) return;
   const names = members.map(m=> (getExercise(m.row.exerciseId)||{}).name).filter(Boolean);
   autoStartRest(members.map(m=>m.row), names.join(' + '));
 }

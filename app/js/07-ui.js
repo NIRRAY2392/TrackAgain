@@ -479,8 +479,14 @@ function closeSheets(){
 }
 
 /* small shared HTML builders */
-function statGridHtml(items){
-  return `<div class="stat-grid">${items.map(i=>`<div class="stat-box"><div class="val">${i.value}</div><div class="lbl">${escapeHtml(i.label)}</div></div>`).join('')}</div>`;
+function statGridHtml(items, extraClass){
+  const cls = extraClass ? `stat-grid ${extraClass}` : 'stat-grid';
+  return `<div class="${cls}">${items.map(i=>{
+    const tone = i.tone ? ` ${i.tone}` : '';
+    const info = i.infoHtml ? ' has-info' : '';
+    const label = i.labelHtml || escapeHtml(i.label||'');
+    return `<div class="stat-box${tone}${info}">${i.infoHtml||''}<div class="val">${i.value}</div><div class="lbl">${label}</div></div>`;
+  }).join('')}</div>`;
 }
 function searchFieldHtml(id, placeholder, value){
   return `<div class="search-wrap"><span class="mag">${icon('search',16)}</span><input id="${id}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value||'')}"></div>`;
@@ -1015,9 +1021,10 @@ function restControlsEl(exerciseId, planRow, exerciseName){
 }
 
 /* --- plank / treadmill countdown --------------------------------------
-   The set is logged first. holdStartedAt on that set is the clock, so
-   locking the phone does not freeze it. Stop and later edits leave the
-   logged minutes alone; editing the duration retargets a running countdown. */
+   The set is saved when you press Start. holdStartedAt is the clock, so
+   locking the phone does not freeze it. Stopping early rewrites duration
+   to the seconds that passed. Finishing the countdown keeps the full time.
+   A record toast waits until then. Editing the duration retargets a running countdown. */
 const holdTokens = {};
 const holdWebTimers = {};
 const holdAlerted = new Set();
@@ -1159,29 +1166,45 @@ function startHoldIfMinute(sets){
   if(!holds.length) return false;
   return beginHoldCountdown(holds[holds.length-1]);
 }
+function holdHitTarget(set){
+  const log = activeWorkoutLog();
+  if(!log || !set || set.isWarmup) return false;
+  const row = (planForLog(log)||[]).find(r=> r && r.exerciseId===set.exerciseId);
+  if(!row) return false;
+  return workingSetsInLogFor(log, set.exerciseId).length===(row.sets||0);
+}
 function completeActiveHold(set){
   if(!set || typeof set.holdStartedAt!=='number') return;
   if(holdRemainingMs(set)>250) return;
   const name = (getExercise(set.exerciseId)||{}).name || 'Hold';
   const id = set.id;
   releaseHold(set);
+  recomputePRs(set.exerciseId);
   saveData(DATA);
-  if(!holdAlerted.has(id)){
-    holdAlerted.add(id);
+  const milestone = holdHitTarget(set);
+  if(set.isPR) celebrateSet(set, milestone);
+  else if(!holdAlerted.has(id)){
+    if(milestone) hapticTick(true);
     if(!document.hidden){
       vibrateRestEnd();
       showToast(`${name} done`);
     }
   }
+  holdAlerted.add(id);
   refreshTimerBar();
   restAfterHold(set);
 }
 function stopActiveHold(){
   const set = findActiveHold();
   if(!set) return;
+  const planned = Math.max(1, Math.round(set.duration||0));
+  const elapsed = Math.max(1, Math.round((Date.now()-set.holdStartedAt)/1000));
+  set.duration = Math.min(planned, elapsed);
   releaseHold(set);
+  recomputePRs(set.exerciseId);
   saveData(DATA);
-  refreshTimerBar();
+  celebrateSet(set, holdHitTarget(set));
+  renderApp();
   restAfterHold(set);
 }
 function syncHoldToDuration(set){

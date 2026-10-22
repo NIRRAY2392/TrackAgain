@@ -141,6 +141,23 @@ function prMomentsForExercise(exerciseId){
   });
   return moments;
 }
+/* One point per day you logged the exercise, best set that day. Unlike PR moments,
+   a lighter day stays in the list, so a progress chart can fall. Oldest first. */
+function sessionSeriesForExercise(exerciseId){
+  const ex = getExercise(exerciseId); if(!ex) return [];
+  const metric = metricOf(ex), higher = betterIsHigher(metric);
+  const byDate = new Map();
+  (DATA.logs||[]).forEach(log=>{
+    (log.sets||[]).forEach(set=>{
+      if(set.exerciseId!==exerciseId || set.isDropSet || set.isWarmup) return;
+      const prev = byDate.get(log.date);
+      if(!prev){ byDate.set(log.date, {date:log.date, set}); return; }
+      const a = setPerformanceScore(set, metric), b = setPerformanceScore(prev.set, metric);
+      if(higher ? a>b : a<b) byDate.set(log.date, {date:log.date, set});
+    });
+  });
+  return [...byDate.values()].sort((a,b)=> a.date.localeCompare(b.date));
+}
 function exercisesWithPrs(muscle){
   return DATA.exercises.filter(e=>primaryOf(e)===muscle && prMomentsForExercise(e.id).length).sort(compareExercises);
 }

@@ -1,14 +1,13 @@
 {
-    "version":  "1.5.0",
-    "build":  6,
-    "date":  "2026-10-16",
+    "version":  "1.6.0",
+    "build":  7,
+    "date":  "2026-10-22",
     "apk":  "downloads/TrackAgain.apk",
-    "apkSize":  4608655,
+    "apkSize":  4560799,
     "notes":  "downloads/",
     "highlights":  [
-                       "Minute countdown for plank and treadmill",
-                       "Plank and treadmill use separate min and sec steppers, so you can log 0:05 or 2:40 — not only whole minutes",
-                       "Spotter no longer suggests odd mid-set jumps (like +1 kg on curls) that ignored the normal weight step",
-                       "Live Spotter on each exercise"
+                       "Train a different day",
+                       "The rest and hold timer fills from white into light yellow, and the time sits in the middle of the bar",
+                       "Plank, side plank, and treadmill say Start, then the countdown runs"
                    ]
 }

@@ -16,6 +16,24 @@ How this file works
 ### Fixes
 ### Nerd stuff
 
+# v1.6.0
+## 22 October 2026
+### Features
+- **Train a different day.** Under Today’s hit list, tap Something else? to do another day from your split, or start a custom session and add exercises as you go. Your split stays as it is.
+### Improvements
+- The rest and hold timer fills from white into light yellow, and the time sits in the middle of the bar.
+- **Workout summary shows growth.** On History, the score is the month’s attendance out of 100. Miss a training day and it eases down. Train again, even on a rest day, and it climbs back. It stops at 100. Rest days are not absences, and today is not a miss until the day is over. All time is the average of those months. The i in the top right explains it.
+- On Records, the progress line follows the heaviest weight you logged each day, so a lighter day pulls the line down. Your record itself stays the best you have done.
+### Fixes
+- Plank, side plank, and treadmill say Start, then the countdown runs. Stopping early saves the time you actually held, not the full time you started.
+- Set steppers on a workout card look right again, and + / − change the number. The in-app picker styling had stretched the number into a full field and covered the buttons.
+### Nerd stuff
+- Field rules use `:where()` so excluding checkbox/radio no longer outranks `.stp-val input` (and other compact inputs).
+- `applyTodaySession` / `openTodaySessionSheet`. A swapped day sets `log.dayKey` plus a plan snapshot. `log.customSession` keeps an empty plan through Start and split sync. Logged sets are kept.
+- Working minute holds (`isMinuteHold`, not a warm-up) label the card button Start via `formatHoldAmount`. `stopActiveHold` stores elapsed seconds (at least 1, at most the time you started) and `recomputePRs`. The record toast waits for `completeActiveHold` or `stopActiveHold`.
+- `monthAttendance(ym)` is the History score, using `workedDateList` (working sets only, so a warm-up does not start the clock). Training weekdays on the current split that have passed count as expected days. A date with working sets counts as attended, including a rest day, and the result is capped at 100. Today is ignored until you train or the day has passed. Days before the first working set are ignored. All time averages those monthly scores. `openScoreInfoSheet` explains it. `historyWeightRows` still feeds Vs previous.
+- Records progress uses `sessionSeriesForExercise`: one best working set per day, including days that were lighter than the record. The line plots that weight. `prMomentsForExercise` is still the PR log and the current record.
+
 # v1.5.0
 ## 16 October 2026
 ### Features

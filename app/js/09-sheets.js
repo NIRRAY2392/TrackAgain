@@ -183,8 +183,9 @@ function openLogSetSheet(opts){
     } else {
       const set = logNormalSet(exerciseId, values, effort, isWarmup, intent);
       closeSheets();
-      startHoldIfMinute([set]);
-      celebrateSet(set);
+      const holding = startHoldIfMinute([set]);
+      if(holding) hapticTick(false);
+      else celebrateSet(set);
       renderApp();
     }
   }
@@ -508,8 +509,10 @@ function openSupersetLogSheet(members){
         markWorkoutActivity(log);
         saveData(DATA);
         closeSheets();
-        startHoldIfMinute(saved);
-        celebrateSets(saved);
+        const holding = startHoldIfMinute(saved);
+        if(holding) hapticTick(false);
+        const ready = holding ? saved.filter(s=> typeof s.holdStartedAt!=='number') : saved;
+        if(ready.length) celebrateSets(ready);
         renderApp();
       };
     }
@@ -835,6 +838,65 @@ function openAlternativesSheet(opts){
         });
       };
       body.appendChild(browse);
+    }
+  });
+}
+
+/* Swap today's hit list to another split day, or an empty custom session. */
+function todaySessionLabel(kind, dayKey){
+  if(kind==='custom') return 'Custom';
+  const key = kind==='scheduled' ? weekdayKey() : dayKey;
+  const day = splitDayFor(key);
+  return day.name || DAY_LABELS[key] || 'Workout';
+}
+function pickTodaySession(kind, dayKey, sheet){
+  const log = todayLog();
+  const label = todaySessionLabel(kind, dayKey);
+  const go = ()=>{
+    applyTodaySession(kind, dayKey);
+    sheet.close();
+    showToast(kind==='scheduled' ? `Back to ${label}` : `Today is ${label}`);
+  };
+  if((log.sets||[]).length){
+    confirmAction(`Switch today's workout to ${label}? Sets you already logged stay in today's history.`, 'Switch', go);
+    return;
+  }
+  go();
+}
+function openTodaySessionSheet(){
+  const log = todayLog();
+  const usual = weekdayKey();
+  const onCustom = !!log.customSession;
+  const overridden = onCustom || (!!log.dayKey && log.dayKey!==usual);
+  openSheet({
+    title:'Want to do something else?',
+    build:(body, sheet)=>{
+      const list = el(`<div class="choice-list"></div>`);
+      const add = (title, sub, kind, dayKey)=>{
+        const row = el(`
+          <button type="button" class="choice-row">
+            <span class="choice-row-label">${escapeHtml(title)}<span class="choice-row-sub">${escapeHtml(sub)}</span></span>
+          </button>`);
+        row.onclick = ()=> pickTodaySession(kind, dayKey, sheet);
+        list.appendChild(row);
+      };
+      if(overridden){
+        const day = splitDayFor(usual);
+        const n = (day.exercises||[]).length;
+        const sub = n
+          ? `${day.name || 'Workout'} · ${n} exercise${n===1?'':'s'} · today's usual day`
+          : `${day.name || 'Rest'} · today's usual day`;
+        add(DAY_LABELS[usual], sub, 'scheduled', usual);
+      }
+      DAY_ORDER.forEach(dk=>{
+        if(dk===usual) return;
+        if(!onCustom && dk===(log.dayKey||usual)) return;
+        const day = splitDayFor(dk);
+        const n = (day.exercises||[]).length;
+        add(DAY_LABELS[dk], n ? `${day.name || 'Workout'} · ${n} exercise${n===1?'':'s'}` : 'Rest', 'day', dk);
+      });
+      if(!onCustom) add('Custom', 'Start empty and add exercises', 'custom', null);
+      body.appendChild(list);
     }
   });
 }
@@ -2086,11 +2148,12 @@ function openRecordsPrSheet(exerciseId){
       }
       const gain = prOverallGain(moments, metric, ex);
       const sinceDays = daysInclusive(current.date, todayKey()) - 1;
-      const oneRm = (metric==='weight_reps' || metric==='weighted_bw') ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
+      const series = sessionSeriesForExercise(exerciseId);
       const minute = isMinuteHold(ex);
-      const axisLabel = metric==='weight_reps' ? `Estimated 1RM (${units()})`
-        : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
+      const axisLabel = metric==='weight_reps' ? `Heaviest weight (${units()})`
+        : metric==='weighted_bw' ? `Heaviest added weight (${units()})`
         : metric==='reps_only' ? 'Best reps' : metric==='time' ? (minute ? 'Longest hold (min)' : 'Longest hold (s)') : `Assistance (${units()}) · lower is better`;
+      const oneRm = (metric==='weight_reps' || metric==='weighted_bw') ? ` · ≈ ${prChartPoint(current, metric)} ${units()} est. 1RM` : '';
       body.appendChild(el(`
         <div>
           <div class="hero-card pr-hero">
@@ -2103,10 +2166,10 @@ function openRecordsPrSheet(exerciseId){
               {value:String(sinceDays), label:sinceDays===1?'Day since PR':'Days since PR'}
             ])}
           </div>
-          ${moments.length>1 ? `
+          ${series.length>1 ? `
           <div class="card flat">
             <p class="section-title" style="margin-top:0;">Progress</p>
-            <p class="small muted" style="margin-bottom:4px;">${escapeHtml(axisLabel)}</p>
+            <p class="small muted" style="margin-bottom:4px;">${escapeHtml(axisLabel)} · each day you logged it. A lighter day pulls the line down.</p>
             <div class="chart-box"><canvas data-chart></canvas></div>
           </div>` : ''}
           <div class="section-title">PR log</div>
@@ -2121,22 +2184,32 @@ function openRecordsPrSheet(exerciseId){
       drawLog();
       const canvas = q('[data-chart]',body);
       if(canvas){
-        const points = moments.map(m=> {
-          const v = prChartPoint(m, metric);
-          return minute ? roundTo(v/60, 2) : v;
+        const plotted = [];
+        series.forEach(m=>{
+          let value;
+          if(metric==='weight_reps' || metric==='weighted_bw' || metric==='assisted') value = m.set.weight;
+          else if(metric==='reps_only') value = m.set.reps;
+          else value = minute ? roundTo((m.set.duration||0)/60, 2) : (m.set.duration||0);
+          if(typeof value==='number' && isFinite(value)){
+            const d = parseDateKey(m.date);
+            plotted.push({label:`${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}`, value});
+          }
         });
-        const lo = Math.min(...points), hi = Math.max(...points);
-        const pad = (hi-lo)*0.25 || hi*0.1 || 1;
-        try{
-          paintHistoryChart(canvas, {
-            type:'line',
-            labels: moments.map(m=>{ const d = parseDateKey(m.date); return `${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}`; }),
-            data: points,
-            yMin: Math.max(0, Math.floor(lo-pad)), yMax: Math.ceil(hi+pad),
-            unit: metric==='time' ? (minute ? 'min' : 's') : metric==='reps_only' ? 'reps' : units()
-          });
-          bindHistoryChart(canvas);
-        }catch(err){ console.error(APP_NAME+': PR chart failed', err); }
+        if(plotted.length>1){
+          const nums = plotted.map(p=>p.value);
+          const lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+          const pad = (hi-lo)*0.25 || Math.abs(hi)*0.1 || 1;
+          try{
+            paintHistoryChart(canvas, {
+              type:'line',
+              labels: plotted.map(p=>p.label),
+              data: nums,
+              yMin: Math.max(0, Math.floor(lo-pad)), yMax: Math.ceil(hi+pad),
+              unit: metric==='time' ? (minute ? 'min' : 's') : metric==='reps_only' ? 'reps' : units()
+            });
+            bindHistoryChart(canvas);
+          }catch(err){ console.error(APP_NAME+': PR chart failed', err); }
+        }
       }
     }
   });
@@ -2321,10 +2394,206 @@ function historyMuscleRowsHtml(muscles, target){
     </div>`;
   }).join('');
 }
-function formatVolumeDelta(pct){
-  if(pct==null || !isFinite(pct)) return '—';
-  const n = Math.round(pct);
-  return (n>0?'+':'')+n+'%';
+function historyRangeKpis(logs, filter){
+  return {score:historyAttendanceScore(filter), vs:historyWeightGain(logs, filter)};
+}
+/* Dates with at least one working set, oldest first. Warm-ups alone do not count. */
+function workedDateList(){
+  const dates = new Set();
+  loggedWorkouts().forEach(log=>{
+    if(workingSetCount(log.sets)>0) dates.add(log.date);
+  });
+  return [...dates].sort();
+}
+/* A split day with exercises is a day the month expects you. Rest days are not absences. */
+function isTrainingDate(date){
+  const day = splitDays()[weekdayKey(parseDateKey(date))];
+  return !!(day && day.exercises && day.exercises.length);
+}
+/* Attendance for one month, out of 100. Days before the first working set are ignored.
+   Today is not a miss until you have trained or the day has passed.
+   Extra gym days raise the score, and it stops at 100. */
+function monthAttendance(ym, worked){
+  const dates = worked || workedDateList();
+  const first = dates[0];
+  if(!first) return null;
+  const today = todayKey();
+  const start = ym+'-01';
+  const last = ym+'-'+String(daysInMonth(ym)).padStart(2,'0');
+  const end = ym===thisMonthKey() ? today : last;
+  if(end<first) return null;
+  const went = new Set(dates.filter(d=>d>=start && d<=end));
+  let scheduled = 0, attended = 0;
+  for(let date=start; date<=end; date=shiftDateKey(date, 1)){
+    if(date<first) continue;
+    const did = went.has(date);
+    const closed = ym!==thisMonthKey() || date<today;
+    if(!closed && !did) continue;
+    if(isTrainingDate(date)) scheduled++;
+    if(did) attended++;
+  }
+  if(!scheduled) return attended ? 100 : null;
+  return Math.round(Math.min(100, (attended/scheduled)*100));
+}
+/* This month and last month are that month. All time is the average of those monthly scores. */
+function historyAttendanceScore(filter){
+  const worked = workedDateList();
+  if(!worked.length) return null;
+  const range = historyRangeKey(filter);
+  if(range) return monthAttendance(range, worked);
+  let ym = worked[0].slice(0,7);
+  const scores = [];
+  let guard = 0;
+  while(ym<=thisMonthKey() && guard<240){
+    const score = monthAttendance(ym, worked);
+    if(score!=null) scores.push(score);
+    ym = shiftMonthKey(ym, 1);
+    guard++;
+  }
+  if(!scores.length) return null;
+  return Math.round(scores.reduce((sum,s)=>sum+s,0)/scores.length);
+}
+/* Heaviest bar weight on a working set. Drop sets use the heaviest stage. */
+function setBarWeight(set){
+  if(!set || set.isWarmup) return null;
+  if(set.isDropSet){
+    const weights = (set.stages||[]).map(s=>s.weight).filter(w=>typeof w==='number' && !isNaN(w));
+    return weights.length ? Math.max.apply(null, weights) : null;
+  }
+  return typeof set.weight==='number' && !isNaN(set.weight) ? set.weight : null;
+}
+function barLoadExercise(ex){
+  if(!ex) return false;
+  const metric = metricOf(ex);
+  return metric==='weight_reps' || metric==='weighted_bw';
+}
+function historyWeightSamples(){
+  const out = [];
+  loggedWorkouts().forEach(log=>{
+    (log.sets||[]).forEach(set=>{
+      const ex = getExercise(set.exerciseId);
+      if(!barLoadExercise(ex)) return;
+      const weight = setBarWeight(set);
+      if(weight==null) return;
+      out.push({exerciseId:set.exerciseId, date:log.date, ts:set.ts||0, weight});
+    });
+  });
+  return out;
+}
+/* Per-lift bar weight in the range. All time is the first logged weight against the
+   best since. Any other range is the best weight before it against the best inside it.
+   A first time in the range is listed, and it does not change the total. */
+function historyWeightRows(logs, filter){
+  const samples = historyWeightSamples();
+  const ids = new Set();
+  logs.forEach(log=>{
+    (log.sets||[]).forEach(set=>{
+      if(!barLoadExercise(getExercise(set.exerciseId))) return;
+      if(setBarWeight(set)==null) return;
+      ids.add(set.exerciseId);
+    });
+  });
+  const span = historyWindow(filter, logs);
+  const allTime = !historyRangeKey(filter);
+  const rows = [];
+  ids.forEach(id=>{
+    const mine = samples.filter(s=>s.exerciseId===id);
+    const inRange = mine.filter(s=>s.date>=span.start && s.date<=span.end);
+    if(!inRange.length) return;
+    const ex = getExercise(id);
+    const now = Math.max.apply(null, inRange.map(s=>s.weight));
+    let before = null;
+    if(allTime){
+      const first = mine.slice().sort((a,b)=> a.date===b.date ? a.ts-b.ts : a.date.localeCompare(b.date))[0];
+      before = first.weight;
+    } else {
+      const prior = mine.filter(s=>s.date<span.start);
+      if(prior.length) before = Math.max.apply(null, prior.map(s=>s.weight));
+    }
+    rows.push({
+      name: ex ? ex.name : 'Exercise',
+      before,
+      now,
+      delta: before==null ? null : roundTo(now-before, 2)
+    });
+  });
+  rows.sort((a,b)=> (b.delta==null?-Infinity:b.delta) - (a.delta==null?-Infinity:a.delta) || a.name.localeCompare(b.name));
+  return {rows, allTime};
+}
+function historyWeightGain(logs, filter){
+  const rows = historyWeightRows(logs, filter).rows;
+  if(!rows.length) return {text:'—', tone:''};
+  const counted = rows.filter(r=>r.delta!=null);
+  if(!counted.length) return formatSignedKg(0);
+  return formatSignedKg(roundTo(counted.reduce((sum,r)=>sum+r.delta,0), 2));
+}
+function formatSignedKg(n){
+  const abs = Math.abs(n);
+  const text = Number.isInteger(abs) ? abs.toLocaleString() : abs.toLocaleString(undefined, {maximumFractionDigits:2});
+  if(n>0) return {text:`+${text} ${units()}`, tone:'up'};
+  if(n<0) return {text:`−${text} ${units()}`, tone:'down'};
+  return {text:`0 ${units()}`, tone:''};
+}
+function formatPlainKg(n){
+  const v = roundTo(n, 2);
+  const text = Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, {maximumFractionDigits:2});
+  return `${text} ${units()}`;
+}
+function openWeightGainSheet(logs, filter){
+  const detail = historyWeightRows(logs, filter);
+  const beforeLabel = detail.allTime ? 'First time' : 'Before';
+  const intro = detail.allTime
+    ? 'The first weight you logged for each lift, and the heaviest you have done since.'
+    : 'The heaviest weight before this range, and the heaviest inside it. A first time in this range does not change the total.';
+  openSheet({
+    title:'Vs previous',
+    build:(body)=>{
+      if(!detail.rows.length){
+        body.appendChild(el(`<p class="empty">No weighted lifts in this range.</p>`));
+        return;
+      }
+      body.appendChild(el(`
+        <div class="pr-gain">
+          <p>${escapeHtml(intro)}</p>
+          ${detail.rows.map(r=>{
+            const delta = r.delta==null ? null : formatSignedKg(r.delta);
+            const from = r.before==null
+              ? '<span class="k">First time</span>'
+              : `<span class="k">${beforeLabel}</span> ${escapeHtml(formatPlainKg(r.before))}`;
+            return `<div class="pr-gain-row">
+              <div class="nm">${escapeHtml(r.name)}</div>
+              <div class="delta">${delta ? escapeHtml(delta.text) : '—'}</div>
+              <div class="pair">${from} <span class="to">→</span> <span class="k">Now</span> ${escapeHtml(formatPlainKg(r.now))}</div>
+            </div>`;
+          }).join('')}
+        </div>`));
+    }
+  });
+}
+function openScoreInfoSheet(){
+  openSheet({
+    title:'How the score works',
+    build:(body)=>{
+      body.appendChild(el(`
+        <div class="score-info">
+          <p>The score is your attendance for the month, out of 100. It is not a grade for a single workout.</p>
+          <h3>How it moves</h3>
+          <ul>
+            <li>Each training day on your split that has already passed is a day the month expected you.</li>
+            <li>Rest days are not absences. Skipping one does not lower the score.</li>
+            <li>Miss a training day and the score eases down, the way attendance does.</li>
+            <li>Go again, even on a rest day, and the score climbs. It can always come back.</li>
+            <li>It stops at 100. More sessions keep it there. They do not ask you to pile on extra days.</li>
+          </ul>
+          <h3>What you are looking at</h3>
+          <ul>
+            <li><b>This month</b> counts up to today. Today is not a miss until the day is over.</li>
+            <li><b>All time</b> is the average of those monthly scores, starting from your first workout.</li>
+            <li>Days before that first workout are left out.</li>
+          </ul>
+        </div>`));
+    }
+  });
 }
 function historyChartPalette(){
   const styles = getComputedStyle(document.documentElement);
@@ -2470,17 +2739,18 @@ function historyRangeSelectHtml(months){
 }
 function renderHistorySummaryCard(logs, filter){
   const insight = historyInsights(logs, filter);
+  const range = historyRangeKpis(logs, filter);
   const freq = historyFrequency(logs, filter);
   const card = el(`
     <div class="card">
       <p class="section-title" style="margin-top:0;">Workout summary</p>
       <div class="field" style="margin:0 0 12px;">${historyRangeSelectHtml(historyMonthOptions(loggedWorkouts()))}</div>
       ${statGridHtml([
-        {value:String(insight.streak), label:'Streak'},
-        {value:String(roundTo(insight.sessionsPerWeek,1)), label:'Per week'},
-        {value:formatVolumeDelta(insight.volumeDeltaPct), label:'vs last'},
-        {value:String(insight.prs), label:'PRs'}
-      ])}
+        {value:range.score==null ? '—' : `${range.score}<span class="stat-of">/100</span>`, label:'Score', infoHtml:`<button type="button" class="stat-info" data-score-info aria-label="How the score is measured">${icon('info',13)}</button>`},
+        {value:escapeHtml(range.vs.text), label:'Vs previous', infoHtml:`<button type="button" class="stat-info" data-gain-info aria-label="Weight change by exercise">${icon('info',13)}</button>`},
+        {value:String(insight.prs), label:'Records'},
+        {value:String(insight.streak), label:'Streak'}
+      ], 'cols-2')}
       <div style="margin-top:16px;">
         <p class="small muted" style="margin-bottom:4px;">Days in the gym</p>
         <div class="chart-box"><canvas data-chart="freq"></canvas></div>
@@ -2491,6 +2761,10 @@ function renderHistorySummaryCard(logs, filter){
         ${insight.underNote?`<p class="faint small" style="margin-top:8px;">${escapeHtml(insight.underNote)}</p>`:''}
       </div>
     </div>`);
+  const scoreInfo = q('[data-score-info]', card);
+  if(scoreInfo) scoreInfo.onclick = (e)=>{ e.stopPropagation(); openScoreInfoSheet(); };
+  const gainInfo = q('[data-gain-info]', card);
+  if(gainInfo) gainInfo.onclick = (e)=>{ e.stopPropagation(); openWeightGainSheet(logs, filter); };
   bindChoiceField(q('#historyRange', card), {
     title:'Workout summary range',
     options:()=> historyRangeOptions(historyMonthOptions(loggedWorkouts())),

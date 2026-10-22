@@ -65,7 +65,7 @@ function todayLog(){
   if(log) return log;
   return {id:uid(), date, dayKey:weekdayKey(), sets:[], active:false, completed:false,
     startedAt:null, endedAt:null, elapsedMs:0, timerRunningSince:null, plan:null, planName:'',
-    warmups:null, warmupDone:[], _transient:true};
+    customSession:false, warmups:null, warmupDone:[], _transient:true};
 }
 function persistLog(log){
   if(!log || !log._transient) return log;
@@ -141,7 +141,7 @@ function homePlanLog(opts){
 function syncActiveWorkoutFromSplit(opts){
   opts = opts || {};
   const log = homePlanLog(opts);
-  if(!log) return false;
+  if(!log || log.customSession) return false;
   const dayKey = log.dayKey || weekdayKey();
   if(opts.dayKey && opts.dayKey!==dayKey) return false;
   if(!Array.isArray(log.hiddenExerciseIds)) log.hiddenExerciseIds = [];
@@ -162,6 +162,37 @@ function syncActiveWorkoutFromSplit(opts){
   const wuIds = new Set(log.warmups.map(w=>w && w.id).filter(Boolean));
   log.warmupDone = (Array.isArray(log.warmupDone) ? log.warmupDone : []).filter(id=> wuIds.has(id));
   return true;
+}
+/* Today's session only. The split is not edited.
+   kind: 'scheduled' (this weekday), 'day' (another split day), 'custom' (empty). */
+function applyTodaySession(kind, dayKey){
+  const log = persistLog(todayLog());
+  log.hiddenExerciseIds = [];
+  log.warmupDone = [];
+  log.queued = [];
+  if(kind==='custom'){
+    log.customSession = true;
+    log.dayKey = weekdayKey();
+    log.plan = [];
+    log.planName = 'Custom';
+    log.warmups = [];
+  } else if(kind==='day'){
+    const routine = splitDayFor(dayKey);
+    log.customSession = false;
+    log.dayKey = dayKey;
+    log.plan = clone(routine.exercises || []);
+    log.plan.forEach(row=>{ row.sessionOnly = false; });
+    log.planName = routine.name || 'Workout';
+    log.warmups = clone(routine.warmups || []);
+  } else {
+    log.customSession = false;
+    log.dayKey = weekdayKey();
+    log.plan = null;
+    log.planName = '';
+    log.warmups = null;
+  }
+  saveData(DATA);
+  renderApp();
 }
 function commitExerciseToSplit(log, exerciseId){
   const dayKey = log.dayKey || weekdayKey();
@@ -209,13 +240,13 @@ function addExerciseToActiveWorkout(exerciseId){
   if(plan.some(r=>r.exerciseId===exerciseId)){ showToast('Already in this workout'); return; }
   const row = newPlanRow(exerciseId,{goal:DATA.settings.goal});
   const dayKey = log.dayKey || weekdayKey();
-  const inSplit = exerciseInSplit(dayKey, exerciseId);
+  const inSplit = !log.customSession && exerciseInSplit(dayKey, exerciseId);
   row.sessionOnly = !inSplit;
   plan.splice(indexAfterStarted(log, plan, new Set()), 0, row);
   saveData(DATA);
   renderApp();
   scrollCardIntoView(exerciseId);
-  if(inSplit){ showToast('Added to this workout'); return; }
+  if(log.customSession || inSplit){ showToast('Added to this workout'); return; }
   const name = (getExercise(exerciseId)||{}).name || 'This exercise';
   const dayLabel = DAY_LABELS[dayKey] || 'this day';
   chooseAction(

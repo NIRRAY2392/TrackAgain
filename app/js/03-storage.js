@@ -555,6 +555,7 @@ function migrate(data){
     if(!log.active || typeof log.timerRunningSince!=='number' || !isFinite(log.timerRunningSince)) log.timerRunningSince = null;
     if(typeof log.plan === 'undefined') log.plan = null;
     if(typeof log.planName !== 'string') log.planName = '';
+    if(typeof log.customSession !== 'boolean') log.customSession = false;
     if(!Array.isArray(log.queued)) log.queued = [];
     else log.queued = log.queued.filter(row=>row && row.exerciseId);
     if(!Array.isArray(log.hiddenExerciseIds)) log.hiddenExerciseIds = [];
