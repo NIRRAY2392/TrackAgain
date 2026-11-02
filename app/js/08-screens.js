@@ -2,6 +2,14 @@
 let VIEW = 'today';
 /* Home has two in-place screens. 'workout' is not a tab. */
 let homeScreen = 'landing';
+/* Settings has in-place screens. 'edit' and 'wu' are not tabs. */
+let settingsScreen = 'main';
+let editExerciseSearch = '';
+let editExerciseFilter = 'on';
+let openEditMuscleGroup = null;
+let warmupLibrarySearch = '';
+let warmupLibraryFilter = 'on';
+let openWarmupMuscle = null;
 const TABS = [
   {key:'today',     icon:'home',     label:'Home'},
   {key:'split',     icon:'calendar', label:'Split'},
@@ -14,10 +22,17 @@ const SCREENS = {
   split:     ()=> renderSplitScreen(),
   history:   ()=> renderHistoryScreen(),
   records:   ()=> renderRecordsScreen(),
-  settings:  ()=> renderSettingsScreen()
+  settings:  ()=> settingsScreen==='edit' ? renderEditExercisesScreen()
+                 : settingsScreen==='wu' ? renderWarmupLibraryScreen()
+                 : renderSettingsScreen()
 };
 function goToTab(key){
   if(key==='today') homeScreen = 'landing';
+  if(key==='settings'){
+    if(VIEW==='settings') settingsScreen = 'main';
+  } else {
+    settingsScreen = 'main';
+  }
   VIEW = key;
   window.scrollTo(0,0);
   renderApp();
@@ -32,6 +47,30 @@ function openWorkoutScreen(){
 function backToLanding(){
   homeScreen = 'landing';
   VIEW = 'today';
+  window.scrollTo(0,0);
+  renderApp();
+}
+function openEditExercisesScreen(){
+  settingsScreen = 'edit';
+  VIEW = 'settings';
+  window.scrollTo(0,0);
+  renderApp();
+}
+function openWarmupLibraryScreen(){
+  settingsScreen = 'wu';
+  VIEW = 'settings';
+  window.scrollTo(0,0);
+  renderApp();
+}
+function backToSettings(){
+  settingsScreen = 'main';
+  editExerciseSearch = '';
+  editExerciseFilter = 'on';
+  openEditMuscleGroup = null;
+  warmupLibrarySearch = '';
+  warmupLibraryFilter = 'on';
+  openWarmupMuscle = null;
+  VIEW = 'settings';
   window.scrollTo(0,0);
   renderApp();
 }
@@ -101,15 +140,16 @@ function renderApp(){
   const app = document.getElementById('app');
   const dateLabel = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   app.innerHTML = '';
+  const subHead = VIEW==='settings' && (settingsScreen==='edit' || settingsScreen==='wu');
   const head = el(`
-    <header class="app-head">
-      <div class="topbar">
+    <header class="app-head${subHead?' is-sub':''}">
+      ${subHead ? '' : `<div class="topbar">
         <div class="brand">${logoMarkHtml()}<span class="word">TrackA'<em>gain</em></span></div>
         <div class="topbar-meta">
           <span class="topbar-date">${escapeHtml(dateLabel)}</span>
           <span class="streak-pill">${icon('flame',14)} ${currentStreakDays()}</span>
         </div>
-      </div>
+      </div>`}
     </header>`);
   app.appendChild(head);
   const screen = el(`<div></div>`);
@@ -390,13 +430,14 @@ function renderLanding(){
   const rowHtml = (row, inSuperset)=>{
     n++;
     const ex = getExercise(row.exerciseId);
-    const done = setsInLogFor(log,row.exerciseId).length>0;
+    const done = setsInLogFor(log,row.exerciseId).some(s=>!holdInProgress(s));
     const range = formatRepRange(row.repsMin, row.repsMax);
-    const target = isMinuteHold(ex) ? `${row.sets} × ${formatHoldRange(row.repsMin, row.repsMax)}`
+    const target = isTreadmill(ex) ? `${row.sets} set${row.sets===1?'':'s'} · by feel`
+      : isMinuteHold(ex) ? `${row.sets} × ${formatHoldRange(row.repsMin, row.repsMax)}`
       : `${row.sets} × ${range}${metricOf(ex)==='time' ? 's' : ''}`;
     return `
       <div class="hl-row${done?' done':''}">
-        <span class="hl-idx">${done ? icon('check',14) : n}</span>
+        <span class="hl-idx">${n}</span>
         <span class="hl-name">${escapeHtml(ex ? ex.name : '?')}${inSuperset ? `<span class="hl-link" title="Superset" aria-label="Superset">${icon('link',13)}</span>` : ''}</span>
         <span class="hl-target">${target}</span>
       </div>`;
@@ -734,6 +775,8 @@ const setDrafts = new Map();
 const editingSets = new Map();
 /* Cards reopened by hand after being finished or left behind; cleared whenever a set is logged. */
 const expandedCards = new Set();
+/* Last painted size of a finished card, so the shrink and the bonus reopen can animate. */
+const hitCardMode = new Map();
 /* Cards opened with "Start exercise" before their first set. Untouched cards hide the logger. */
 const startedCards = new Set();
 
@@ -746,27 +789,38 @@ function defaultHoldSeconds(sample, planRow, minute){
 }
 /* Values in the card's inline logger. They carry over between sets and
    follow the planned load when the overload suggestion is accepted. */
-function setDraftFor(key, planRow, sample, plannedWeight){
+function setDraftFor(key, planRow, sample, plannedWeight, suggestion){
   let d = setDrafts.get(key);
   if(!d){
     const minute = isMinuteHold(getExercise(planRow.exerciseId));
+    const sugW = suggestion && suggestion.weight!=null ? suggestion.weight : null;
+    const sugR = suggestion && suggestion.reps!=null ? suggestion.reps : null;
     d = {
-      weight: sample && sample.weight!=null ? sample.weight : 0,
-      reps: sample && sample.reps ? sample.reps : (planRow.repsMin || 8),
+      weight: sugW!=null ? sugW : (sample && sample.weight!=null ? sample.weight : 0),
+      reps: sugR!=null ? sugR : (sample && sample.reps ? sample.reps : (planRow.repsMin || 8)),
       duration: defaultHoldSeconds(sample, planRow, minute),
       effort: (sample && sample.difficulty) || 'med',
       warmup: false,
+      weightTouched: false,
+      repsTouched: false
     };
     setDrafts.set(key, d);
   }
-  if(plannedWeight!=null && plannedWeight!==d.planW) d.weight = plannedWeight;
+  if(typeof d.weightTouched!=='boolean') d.weightTouched = false;
+  if(typeof d.repsTouched!=='boolean') d.repsTouched = false;
+  if(suggestion && !editingSets.has(key)){
+    if(!d.weightTouched && suggestion.weight!=null) d.weight = suggestion.weight;
+    if(!d.repsTouched && suggestion.reps!=null) d.reps = suggestion.reps;
+    d.suggestW = suggestion.weight;
+    d.suggestR = suggestion.reps;
+  } else if(plannedWeight!=null && plannedWeight!==d.planW && !d.weightTouched) d.weight = plannedWeight;
   d.planW = plannedWeight;
   return d;
 }
 
-function stepperHtml(field, value, unit, label, decimal){
+function stepperHtml(field, value, unit, label, decimal, extra){
   return `
-    <div class="stp" data-field="${field}">
+    <div class="stp${extra?' '+extra:''}" data-field="${field}">
       <button type="button" class="stp-btn" data-dec aria-label="Less ${label}">${icon('minus',16)}</button>
       <label class="stp-val"><input type="number" inputmode="${decimal||field==='weight'?'decimal':'numeric'}" value="${value}" aria-label="${label}"><span>${unit}</span></label>
       <button type="button" class="stp-btn" data-inc aria-label="More ${label}">${icon('plus',16)}</button>
@@ -804,15 +858,51 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
   return (showAll ? rows : rows.slice(-2)).join('');
 }
 
+function todayBriefParts(set, metric){
+  const src = set.isDropSet && set.stages && set.stages[0]
+    ? Object.assign({exerciseId:set.exerciseId}, set.stages[0])
+    : set;
+  const val = setValueText(src, metric);
+  const feel = set.isWarmup ? 'Warm-up' : set.isDropSet ? 'Drop' : (set.difficulty ? effortLabel(set.difficulty) : '');
+  return {val, feel};
+}
+function todayBriefText(sets, metric){
+  if(!sets || !sets.length) return '';
+  return sets.map(set=>{
+    const part = todayBriefParts(set, metric);
+    return part.feel ? part.val+' '+part.feel : part.val;
+  }).join(' · ');
+}
+function todaySetLineHtml(sets, metric){
+  if(!sets || !sets.length) return '';
+  return sets.map(set=>{
+    const part = todayBriefParts(set, metric);
+    return `<div class="hit-setline"><span class="hit-setline-val">${escapeHtml(part.val)}</span>${part.feel ? `<span class="hit-setline-feel">${escapeHtml(part.feel)}</span>` : ''}</div>`;
+  }).join('');
+}
+function nextExerciseStarted(planRow, log){
+  const plan = planForLog(log) || [];
+  const idx = plan.findIndex(row => row && row.exerciseId===planRow.exerciseId);
+  if(idx<0) return false;
+  return plan.slice(idx+1).some(row=>{
+    if(!row || !row.exerciseId) return false;
+    const key = `${log.date}:${row.exerciseId}`;
+    return startedCards.has(key) || setsInLogFor(log, row.exerciseId).length>0;
+  });
+}
 /* One exercise card inside an active workout. */
 function workoutExerciseCard(planRow, index, log, opts){
   opts = opts || {};
   const ex = getExercise(planRow.exerciseId);
   if(!ex) return el(`<div></div>`);
   const metric = metricOf(ex);
-  const status = progressionFor(planRow.exerciseId, planRow);
-  const doneSets = setsInLogFor(log, planRow.exerciseId);
-  const working = workingSetsInLogFor(log, planRow.exerciseId);
+  const allSets = setsInLogFor(log, planRow.exerciseId);
+  const pendingHold = allSets.find(holdInProgress) || null;
+  const doneSets = allSets.filter(s=>!holdInProgress(s));
+  const engineOn = spotterUsesEngine(ex);
+  const engineView = engineOn ? spotterCardView(planRow, log, doneSets) : null;
+  const status = engineOn ? null : progressionFor(planRow.exerciseId, planRow);
+  const working = doneSets.filter(s=>!s.isWarmup);
   const progressMsg = !working.length ? ''
     : working.length < planRow.sets ? `${planRow.sets-working.length} set${planRow.sets-working.length>1?'s':''} to go`
     : working.length === planRow.sets ? 'Target hit — great work!'
@@ -820,7 +910,10 @@ function workoutExerciseCard(planRow, index, log, opts){
   const progressCls = working.length > planRow.sets ? 'hit-bonus-msg'
     : working.length >= planRow.sets ? 'hit-done-msg' : 'hit-progress-msg';
   const minuteHold = isMinuteHold(ex);
-  const targetLine = minuteHold
+  const walk = isTreadmill(ex);
+  const targetLine = walk
+    ? `${planRow.sets} set${planRow.sets===1?'':'s'} · by feel${planRow.rpe?` · RPE ${planRow.rpe}`:''}`
+    : minuteHold
     ? `${planRow.sets} set${planRow.sets===1?'':'s'} · ${formatHoldRange(planRow.repsMin, planRow.repsMax)}${planRow.rpe?` · RPE ${planRow.rpe}`:''}`
     : `${planRow.sets} set${planRow.sets===1?'':'s'}${metric!=='time' ? ` · ${formatRepRange(planRow.repsMin, planRow.repsMax)} reps` : ''}${planRow.rpe?` · RPE ${planRow.rpe}`:''}`;
   const lastBits = lastLoggedBits(planRow.exerciseId);
@@ -829,7 +922,8 @@ function workoutExerciseCard(planRow, index, log, opts){
   const planned = loadPlanFor(planRow.exerciseId);
   const listKey = `${log.date}:${planRow.exerciseId}`;
   const showAll = openSetLists.has(listKey);
-  const draft = setDraftFor(listKey, planRow, sample, planned && planned.weight!=null ? planned.weight : null);
+  const suggestion = engineView ? {weight:engineView.fillWeight, reps:engineView.fillReps} : null;
+  const draft = setDraftFor(listKey, planRow, sample, engineOn ? null : (planned && planned.weight!=null ? planned.weight : null), suggestion);
   const refText = lastBits ? `Last time ${lastBits.text}` : doneSets.length ? '' : 'Feeler set';
 
   let editing = editingSets.get(listKey) || null;
@@ -847,19 +941,28 @@ function workoutExerciseCard(planRow, index, log, opts){
   const lastLogged = log.sets[log.sets.length-1];
   const ownIds = opts.groupIds || [planRow.exerciseId];
   const movedOn = doneSets.length > 0 && !!lastLogged && !ownIds.includes(lastLogged.exerciseId);
+  const nextStarted = isDone && nextExerciseStarted(planRow, log);
   const collapsed = !editing && !expandedCards.has(listKey) && (isDone || movedOn);
-  const started = doneSets.length>0 || !!editing || startedCards.has(listKey) || !!opts.groupStarted;
+  const mini = isDone && nextStarted && collapsed;
+  const prevMode = hitCardMode.get(listKey) || '';
+  const nextMode = mini ? 'mini' : 'open';
+  hitCardMode.set(listKey, nextMode);
+  const morph = prevMode && prevMode!==nextMode ? (mini ? 'to-mini' : 'to-open') : '';
+  const paintMini = morph==='to-mini' ? false : morph==='to-open' ? true : mini;
+  const started = doneSets.length>0 || !!pendingHold || !!editing || startedCards.has(listKey) || !!opts.groupStarted;
   const latest = doneSets[doneSets.length-1];
   const fresh = isFreshSet(listKey, latest);
   const freshDot = fresh && !latest.isWarmup ? working.length-1 : -1;
   // Reopening a card swaps in a look-ahead line, unless the last set left advice to act on.
   const reopened = expandedCards.has(listKey) ? (isDone ? 'bonus' : movedOn ? 'back' : null) : null;
-  const plainFeedback = liveSetFeedback(planRow.exerciseId, planRow, doneSets, status);
+  const plainFeedback = engineOn ? null : liveSetFeedback(planRow.exerciseId, planRow, doneSets, status);
   const feedback = reopened && plainFeedback && plainFeedback.tone!=='adjust'
     ? liveSetFeedback(planRow.exerciseId, planRow, doneSets, status, reopened) : plainFeedback;
   // An unanswered "Ready to add load" prompt stays until Use / Not today / Adjust.
-  const readyPrompt = status.state==='ready';
-  const showCoach = !!feedback && !(readyPrompt && !working.length) && !editing && (!collapsed || !movedOn);
+  const readyPrompt = !engineOn && status && status.state==='ready';
+  const showCoach = pendingHold ? false : engineOn
+    ? (!!engineView && !editing && (isDone || !collapsed || !movedOn))
+    : (!!feedback && !(readyPrompt && !working.length) && !editing && (!collapsed || !movedOn));
 
   const todayBox = doneSets.length ? `
     <div class="today-sets">
@@ -871,6 +974,8 @@ function workoutExerciseCard(planRow, index, log, opts){
     </div>` : '';
 
   const wStep = loadStepFor(ex, planRow);
+  const sugW = !!(engineView && !draft.weightTouched && engineView.fillWeight!=null);
+  const sugR = !!(engineView && !draft.repsTouched && engineView.fillReps!=null);
   const weightUnit = metric==='assisted' ? 'kg assist' : metric==='weighted_bw' ? 'kg added'
     : equipOf(ex)==='dumbbell' ? `${units()} each` : units();
   const weightName = metric==='assisted' ? 'assistance' : metric==='weighted_bw' ? 'added weight' : 'weight';
@@ -879,9 +984,9 @@ function workoutExerciseCard(planRow, index, log, opts){
     ? (minuteHold
       ? stepperHtml('holdMin', hold.min, 'min', 'minutes') + stepperHtml('holdSec', hold.sec, 'sec', 'seconds')
       : stepperHtml('duration', draft.duration, 'sec', 'seconds'))
-    : metric==='reps_only' ? stepperHtml('reps', draft.reps, 'reps', 'reps')
-    : stepperHtml('weight', draft.weight, weightUnit, weightName)
-      + stepperHtml('reps', draft.reps, 'reps', 'reps');
+    : metric==='reps_only' ? stepperHtml('reps', draft.reps, 'reps', 'reps', false, sugR?'stp-suggested':'')
+    : stepperHtml('weight', draft.weight, weightUnit, weightName, false, sugW?'stp-suggested':'')
+      + stepperHtml('reps', draft.reps, 'reps', 'reps', false, sugR?'stp-suggested':'');
   const showWarmup = !(editSet && editSet.isDropSet);
   const nextSet = `
     <div class="next-set${editing?' is-editing':''}">
@@ -897,56 +1002,105 @@ function workoutExerciseCard(planRow, index, log, opts){
         ${['easy','med','hard'].map(k=>`<button type="button" role="radio" data-eff="${k}" aria-checked="${draft.effort===k}" class="${draft.effort===k?'on':''}">${effortLabel(k)}</button>`).join('')}
       </div>
     </div>`;
+  const dropHtml = canDropWeight(ex)
+    ? `<button type="button" class="btn secondary drop-btn" data-drop>Log drop set</button>`
+    : '';
+  const actionBlock = !started && opts.inSuperset ? '' : `<div class="hit-actions">
+          ${collapsed
+            ? `<button type="button" class="btn secondary expand-btn" data-expand>${isDone ? `${icon('plus',18)} Add bonus set` : `Continue · set ${doneSets.length+1}`}</button>`
+            : !started
+            ? `<button type="button" class="btn add-set start-ex" data-start>${icon('plus',18)} Start exercise</button>`
+            : editing
+            ? `<button type="button" class="btn secondary drop-btn" data-cancel-edit>Cancel</button>
+               <button type="button" class="btn add-set" data-update>${icon('check',18)} Update set</button>`
+            : `${dropHtml}
+               <button type="button" class="btn add-set" data-log-now>${icon('plus',18)} ${minuteHold && !draft.warmup ? `Start ${escapeHtml(formatHoldAmount(draft.duration))}` : `Log set ${doneSets.length+1}`}</button>`}
+        </div>`;
+  /* A running hold keeps the set you started. Stop and the clock live on the top bar. */
+  const afterToday = pendingHold
+    ? nextSet
+    : `${collapsed || !started ? '' : nextSet}${actionBlock}`;
 
   const card = el(`
-    <div class="hit-card ${working.length>=planRow.sets ? 'done' : ''}${started ? '' : ' not-started'}" data-ex="${planRow.exerciseId}" style="--i:${index||0}">
-      <div class="row between" style="align-items:flex-start;">
+    <div class="hit-card${isDone ? ' done' : ''}${paintMini ? ' is-mini' : ''}${started ? '' : ' not-started'}" data-ex="${planRow.exerciseId}" style="--i:${index||0}">
+      <div class="hit-top"><div class="hit-top-in row between" style="align-items:flex-start;">
         <div class="row" style="align-items:flex-start;min-width:0;flex:1;">
           <span class="hit-icon">${icon('dumbbell',20)}</span>
-          <div style="min-width:0;">
-            <div class="name">${escapeHtml(ex.name)} ${working.length>=planRow.sets ? '<span class="done-badge">✓</span>' : ''}</div>
-            <div class="row wrap" style="margin-top:6px;gap:6px;">
-              <span class="hit-muscle">${escapeHtml(primaryOf(ex))}</span>
-            </div>
-            <div class="hit-target">${escapeHtml(targetLine)}</div>
+          <div style="min-width:0;flex:1;">
+            <div class="name">${escapeHtml(ex.name)}</div>
+            <div class="hit-meta"><div class="hit-meta-in">
+              <div class="row wrap" style="margin-top:6px;gap:6px;">
+                <span class="hit-muscle">${escapeHtml(primaryOf(ex))}</span>
+              </div>
+              <div class="hit-target">${escapeHtml(targetLine)}</div>
+            </div></div>
           </div>
         </div>
-        <button class="btn ghost" data-remove title="Remove from this workout" aria-label="Remove from this workout" style="padding:8px;min-width:44px;color:var(--red);">${icon('x',18)}</button>
-        <button class="btn ghost" data-alternatives title="Alternatives" aria-label="Alternatives" style="padding:8px;min-width:44px;">${icon('lightbulb',18)}</button>
-      </div>
-      ${planRow.notes ? `<p class="faint small" style="margin-top:8px;">${escapeHtml(planRow.notes)}</p>` : ''}
-      ${planRow.oftenDoneAsDropSet ? `<p class="hint-oftendrop">Often done as a drop set</p>` : ''}
-      <div class="hit-prog">
-        ${setDotsHtml(working.length, planRow.sets, freshDot)}
-        ${progressMsg ? `<span class="${progressCls}">${progressMsg}</span>` : ''}
-      </div>
-      ${collapsed && !showCoach ? '' : '<div data-progression></div>'}
-      ${todayBox}
-      ${collapsed || !started ? '' : nextSet}
-      ${!started && opts.inSuperset ? '' : `<div class="hit-actions">
-        ${collapsed
-          ? `<button type="button" class="btn secondary expand-btn" data-expand>${isDone ? `${icon('plus',18)} Add bonus set` : `Continue · set ${doneSets.length+1}`}</button>`
-          : !started
-          ? `<button type="button" class="btn add-set start-ex" data-start>${icon('plus',18)} Start exercise</button>`
-          : editing
-          ? `<button type="button" class="btn secondary drop-btn" data-cancel-edit>Cancel</button>
-             <button type="button" class="btn add-set" data-update>${icon('check',18)} Update set</button>`
-          : `<button type="button" class="btn secondary drop-btn" data-drop>Log drop set</button>
-             <button type="button" class="btn add-set" data-log-now>${icon('plus',18)} ${minuteHold && !draft.warmup ? `Start ${escapeHtml(formatHoldAmount(draft.duration))}` : `Log set ${doneSets.length+1}`}</button>`}
-      </div>`}
+        <div class="hit-tools">
+          <button type="button" class="btn ghost" data-edit-plan title="Edit" aria-label="Edit">${icon('settings',18)}</button>
+          <button type="button" class="btn ghost" data-alternatives title="Alternatives" aria-label="Alternatives">${icon('lightbulb',18)}</button>
+          <button type="button" class="btn ghost" data-remove title="Remove from this workout" aria-label="Remove from this workout">${icon('x',18)}</button>
+        </div>
+      </div></div>
+      <div class="hit-fold"${paintMini ? ' inert' : ''}><div class="hit-fold-in">
+        ${planRow.notes ? `<p class="faint small" style="margin-top:8px;">${escapeHtml(planRow.notes)}</p>` : ''}
+        ${canDropWeight(ex) && planRow.oftenDoneAsDropSet ? `<p class="hint-oftendrop">Often done as a drop set</p>` : ''}
+        <div class="hit-prog">
+          ${setDotsHtml(working.length, planRow.sets, freshDot)}
+          ${progressMsg ? `<span class="${progressCls}">${progressMsg}</span>` : ''}
+        </div>
+        ${pendingHold || (collapsed && !showCoach) ? '' : '<div data-progression></div>'}
+        ${todayBox}
+        ${afterToday}
+      </div></div>
+      ${isDone ? `<div class="hit-mini-foot"${paintMini ? '' : ' inert'}><div class="hit-mini-in">
+        <div class="hit-mini-head">
+          <div class="name hit-mini-name">${escapeHtml(ex.name)}</div>
+          <span class="hit-muscle hit-mini-muscle">${escapeHtml(primaryOf(ex))}</span>
+        </div>
+        <div class="hit-mini-body">
+          <div class="hit-setlines" aria-label="Today, ${escapeHtml(todayBriefText(doneSets, metric))}">${todaySetLineHtml(doneSets, metric)}</div>
+          <button type="button" class="btn hit-bonus" data-expand${paintMini ? '' : ' inert'}>Bonus set ${icon('plus',15)}</button>
+        </div>
+      </div></div>` : ''}
     </div>`);
 
-  if(collapsed) q('[data-expand]',card).onclick = ()=>{ expandedCards.add(listKey); renderApp(); };
+  if(morph){
+    requestAnimationFrame(()=> requestAnimationFrame(()=>{
+      if(!card.isConnected) return;
+      card.classList.toggle('is-mini', mini);
+      const fold = q('.hit-fold', card);
+      const foot = q('.hit-mini-foot', card);
+      const bonus = q('.hit-bonus', card);
+      if(fold) fold.toggleAttribute('inert', mini);
+      if(foot) foot.toggleAttribute('inert', !mini);
+      if(bonus) bonus.toggleAttribute('inert', !mini);
+    }));
+  }
+  qa('[data-expand]',card).forEach(btn=> btn.onclick = ()=>{ expandedCards.add(listKey); renderApp(); });
   const startBtn = q('[data-start]',card);
   if(startBtn) startBtn.onclick = ()=>{
     startedCards.add(listKey);
     renderApp();
     scrollCardIntoView(planRow.exerciseId);
   };
-  if(!collapsed && (readyPrompt || !showCoach)) q('[data-progression]',card).appendChild(progressionBlock(status, planRow));
-  if(showCoach) q('[data-progression]',card).appendChild(liveCoachBox(feedback, {
-    listKey, draft, metric, latest, fresh, exerciseId:planRow.exerciseId, planRow, status, todaySets:doneSets
-  }));
+  const editPlan = q('[data-edit-plan]', card);
+  if(editPlan) editPlan.onclick = (e)=>{
+    e.stopPropagation();
+    openExercisePlanSheet(planRow.exerciseId);
+  };
+  if(!pendingHold && engineOn){
+    if(showCoach && engineView) q('[data-progression]',card).appendChild(spotterEngineBox(engineView, draft, fresh, started, listKey, isDone ? (reopened==='bonus' ? 'bonus' : 'closed') : 'live'));
+  } else if(!pendingHold){
+    if(!collapsed && (readyPrompt || !showCoach)) q('[data-progression]',card).appendChild(progressionBlock(status, planRow));
+    if(showCoach) q('[data-progression]',card).appendChild(liveCoachBox(feedback, {
+      listKey, draft, metric, latest, fresh, exerciseId:planRow.exerciseId, planRow, status, todaySets:doneSets
+    }));
+  }
+  if(fresh && latest){
+    const row = q(`[data-edit-set="${latest.id}"]`, card);
+    if(row) row.classList.add('ts-pulse');
+  }
 
   qa('[data-toggle-sets]',card).forEach(node=> node.onclick = ()=>{
     if(showAll) openSetLists.delete(listKey); else openSetLists.add(listKey);
@@ -1006,7 +1160,7 @@ function workoutExerciseCard(planRow, index, log, opts){
     const values = setValuesFrom(metric, draft);
     if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
     if(!addDropStage(target, values, draft.effort)){ showToast('A drop set can have up to 5 stages'); return; }
-    hapticTick(false);
+    if(typeof haptic==='function') haptic('tap');
     renderApp();
   };
 
@@ -1133,6 +1287,9 @@ function workoutExerciseCard(planRow, index, log, opts){
       let n = roundTo(parseFloat(shown), cfg.dp);
       if(isNaN(n) || n<=0) n = cfg.min;
       else if(clamp) n = Math.max(cfg.min, n);
+      if(field==='weight') draft.weightTouched = true;
+      if(field==='reps') draft.repsTouched = true;
+      stp.classList.remove('stp-suggested');
       draft[field] = n;
       input.value = draft[field];
       fit(); paintPreview();
@@ -1143,6 +1300,9 @@ function workoutExerciseCard(planRow, index, log, opts){
     input.oninput = ()=>{
       const v = parseFloat(input.value);
       if(isNaN(v)) return;
+      if(field==='weight') draft.weightTouched = true;
+      if(field==='reps') draft.repsTouched = true;
+      stp.classList.remove('stp-suggested');
       draft[field] = v;
       fit(); paintPreview();
     };
@@ -1161,6 +1321,8 @@ function workoutExerciseCard(planRow, index, log, opts){
     const before = planForLog(log).indexOf(planRow);
     const set = logNormalSet(planRow.exerciseId, values, draft.effort, draft.warmup, null);
     draft.warmup = false;
+    draft.weightTouched = false;
+    draft.repsTouched = false;
     expandedCards.clear();
     const holding = startHoldIfMinute([set]);
     if(holding) hapticTick(false);
@@ -1207,6 +1369,136 @@ function scrollCardIntoView(exerciseId){
 /* Per-card coach memory, keyed like setDrafts. A line keeps its wording across
    re-renders of the same set, and a wording is not reused twice in a row. */
 const SPOTTER_LABEL = `<div class="sb-label">Spotter's suggestion</div>`;
+function spotterReducedMotion(){
+  try{ return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  catch(e){ return false; }
+}
+function spotterCountUp(node){
+  if(!node || node.dataset.counted==='1' || spotterReducedMotion()) return;
+  node.dataset.counted = '1';
+  const text = node.textContent || '';
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  if(!match) return;
+  const target = parseFloat(match[1]);
+  if(!isFinite(target) || target<=0 || target>9999) return;
+  const start = (typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
+  const decimals = match[1].indexOf('.')>=0 ? match[1].split('.')[1].length : 0;
+  const paint = (now)=>{
+    const t = Math.max(0, Math.min(1, ((now||Date.now())-start)/400));
+    const eased = 1 - Math.pow(1-t, 3);
+    const val = Math.max(0, target * eased);
+    const shown = decimals ? val.toFixed(decimals) : String(Math.round(val));
+    node.textContent = text.slice(0, match.index) + shown + text.slice(match.index+match[1].length);
+    if(t<1 && typeof requestAnimationFrame==='function') requestAnimationFrame(paint);
+    else node.textContent = text;
+  };
+  if(typeof requestAnimationFrame==='function') requestAnimationFrame(paint);
+  else node.textContent = text;
+}
+function showPrConfetti(){
+  if(spotterReducedMotion()) return;
+  const layer = document.createElement('div');
+  layer.className = 'pr-confetti';
+  layer.setAttribute('aria-hidden', 'true');
+  const colors = ['var(--spark)', '#ffffff', 'var(--silver)'];
+  for(let i=0;i<42;i++){
+    const piece = document.createElement('i');
+    const wide = i%5===0;
+    piece.style.left = (4+Math.random()*92)+'%';
+    piece.style.background = colors[i%colors.length];
+    piece.style.width = (wide ? 8 : 5)+'px';
+    piece.style.height = (wide ? 8 : 11+Math.random()*6)+'px';
+    piece.style.borderRadius = wide ? '999px' : '1px';
+    piece.style.setProperty('--dx', ((Math.random()*2-1)*36)+'px');
+    piece.style.setProperty('--rot', String(Math.round(70+Math.random()*140)));
+    piece.style.animationDelay = (Math.random()*1.05)+'s';
+    piece.style.animationDuration = (3.4+Math.random()*1.15)+'s';
+    layer.appendChild(piece);
+  }
+  document.body.appendChild(layer);
+  setTimeout(()=>{ if(layer.parentNode) layer.remove(); }, 5800);
+}
+const spotterTyped = new Map();
+function spotterTypeNodes(nodes, key, play){
+  const list = (nodes||[]).filter(node=> node && (node.textContent||'').length);
+  if(!play || !list.length || spotterReducedMotion() || typeof requestAnimationFrame!=='function') return;
+  if(spotterTyped.get(key)) return;
+  spotterTyped.set(key, 1);
+  const parts = list.map(node=>({node, full:node.textContent}));
+  parts.forEach(p=>{ p.node.textContent = ''; });
+  let index = 0;
+  let started = 0;
+  const frame = (now)=>{
+    const part = parts[index];
+    if(!part || !part.node.isConnected) return;
+    if(!started){
+      started = now;
+      part.node.classList.add('is-typing');
+    }
+    const dur = Math.min(980, Math.max(260, part.full.length*20));
+    const t = Math.min(1, (now-started)/dur);
+    const count = Math.max(1, Math.round(t*part.full.length));
+    part.node.textContent = part.full.slice(0, count);
+    if(t<1){
+      requestAnimationFrame(frame);
+      return;
+    }
+    part.node.textContent = part.full;
+    part.node.classList.remove('is-typing');
+    index += 1;
+    started = 0;
+    if(index<parts.length) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+function spotterUseDetail(msg){
+  const reps = msg.fillReps;
+  const w = msg.fillWeight;
+  const bw = !!msg.bodyweight;
+  if(reps==null && w==null) return '';
+  if(msg.metric==='reps_only' || w==null || (bw && !(w>0))) return reps!=null ? (reps+' reps') : 'bodyweight';
+  const load = msg.metric==='weighted_bw' ? ('BW + '+w+' '+units()) : (w+' '+units());
+  return reps!=null ? (load+' × '+reps) : load;
+}
+function spotterAlreadyFilled(msg, draft){
+  const wOk = msg.fillWeight==null || Math.abs((Number(draft.weight)||0) - Number(msg.fillWeight)) < 0.001;
+  const rOk = msg.fillReps==null || Number(draft.reps)===Number(msg.fillReps);
+  return wOk && rOk && (msg.fillWeight!=null || msg.fillReps!=null);
+}
+function spotterEngineBox(msg, draft, fresh, started, typeKey, mode){
+  mode = mode || 'live';
+  const talk = mode==='closed' ? spotterClosedTalk(msg)
+    : mode==='bonus' ? spotterBonusTalk(msg)
+    : (msg.talk || {lead: msg.headline || "Spotter's suggestion", why: msg.numbers || ''});
+  const detail = mode==='closed' ? '' : spotterUseDetail(msg);
+  const applied = !!started && spotterAlreadyFilled(msg, draft);
+  const adjust = mode==='closed'
+    ? !!(msg.wrap && msg.wrap.cmp==='light')
+    : /BELOW|TOO_HEAVY|DELOAD|RESET|WRAP_EX_LIGHT|HOLD/.test((msg.type||'')+' '+(msg.planKind||''));
+  const box = el(`
+    <div class="suggest-box coach-box${adjust?' tone-adjust':''}${fresh?' spot-swap':''}${msg.glow?' spot-glow':''}${fresh && msg.glow?' spot-glow-in':''}" aria-live="polite">
+      ${guideInfoBtnHtml()}
+      ${SPOTTER_LABEL}
+      ${talk.lead ? `<div class="sb-line">${escapeHtml(talk.lead)}</div>` : ''}
+      ${talk.why ? `<p class="spot-why">${escapeHtml(talk.why)}</p>` : ''}
+      ${detail ? `<button type="button" class="btn ${applied?'secondary ':''}lb-use" data-spot-fill>${escapeHtml('Use '+detail)}</button>` : ''}
+      ${detail ? `<p class="faint small spot-tap-hint">${applied ? 'Already filled in. Log it, or change the numbers above.' : (started ? 'Puts this in the steppers. You can still change it before you log.' : 'This is what the steppers open on. You can change it after you start.')}</p>` : ''}
+      ${msg.prChip ? '<span class="spot-pr-chip">PR</span>' : ''}
+    </div>`);
+  const fill = q('[data-spot-fill]', box);
+  if(fill) fill.onclick = ()=>{
+    const already = !!started && spotterAlreadyFilled(msg, draft);
+    if(msg.fillWeight!=null){ draft.weight = msg.fillWeight; draft.weightTouched = false; }
+    if(msg.fillReps!=null){ draft.reps = msg.fillReps; draft.repsTouched = false; }
+    if(typeof haptic==='function') haptic('tap');
+    showToast(!started ? 'Ready when you start' : (already ? 'Already in the steppers' : 'Steppers updated'));
+    renderApp();
+  };
+  bindGuideInfo(box, 'overload');
+  const talkKey = (typeKey || ((talk.lead||'')+'|'+(talk.why||'')))+':'+mode;
+  spotterTypeNodes([q('.sb-line', box), q('.spot-why', box)], talkKey+':'+(talk.lead||'')+':'+(talk.why||''), fresh || mode==='bonus');
+  return box;
+}
 const coachLines = new Map();
 const coachVariantUsed = new Map();
 const coachAnimated = new Map();
@@ -1274,6 +1566,7 @@ function liveCoachBox(fb, {listKey, draft, metric, latest, fresh, exerciseId, pl
   };
   box._spotChips = chips;
   bindGuideInfo(box, 'overload');
+  spotterTypeNodes([q('.sb-line', box)], listKey+':'+(fb.key||'')+':'+text, fresh);
   return box;
 }
 
@@ -1369,6 +1662,8 @@ function logSupersetRound(members, log){
   const logged = entries.map(({exerciseId, values, draft})=>{
     const set = logNormalSet(exerciseId, values, draft.effort, draft.warmup, null);
     draft.warmup = false;
+    draft.weightTouched = false;
+    draft.repsTouched = false;
     return set;
   });
   expandedCards.clear();
@@ -1398,6 +1693,7 @@ function openCelebrationSheet(log){
     return ex ? {name:ex.name, value:formatPrValue(s, metricOf(ex))} : null;
   }).filter(Boolean);
   const shownPrs = prRows.slice(0,3);
+  const wrap = spotterWorkoutSummary(log);
   openSheet({
     centered:true,
     build:(body, sheet)=>{
@@ -1426,7 +1722,8 @@ function openCelebrationSheet(log){
             </div>`).join('')}
             ${prRows.length>shownPrs.length ? `<div class="done-pr-more">+${prRows.length-shownPrs.length} more</div>` : ''}
           </div>` : ''}
-          <p class="done-line">${escapeHtml(appreciationLine(totalSets, prCount))}</p>
+          <p class="done-line">${escapeHtml(wrap ? (wrap.headline || wrap.detail || wrap.numbers || 'Workout saved.') : appreciationLine(totalSets, prCount))}</p>
+          ${wrap && wrap.headline && wrap.detail ? `<p class="done-muscles">${escapeHtml(wrap.detail)}</p>` : ''}
           ${topMuscles?`<p class="done-muscles">${escapeHtml(topMuscles)} effective sets</p>`:''}
           <div class="done-streak">${icon('flame',14)} ${currentStreakDays()} day streak</div>
           <div class="done-actions">

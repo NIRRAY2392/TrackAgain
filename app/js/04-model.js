@@ -4,8 +4,79 @@ function trainedDayCount(split){
   if(!split || !split.days) return 0;
   return DAY_KEYS.filter(dk=>((split.days[dk]||{}).exercises||[]).length).length;
 }
+function currentPreset(){
+  return (DATA.presets||[]).find(p=>p.id===DATA.activePresetId) || null;
+}
 function activeSplit(){ return DATA.splits[DATA.activeSplit]; }
 function splitDays(){ return activeSplit().days; }
+/* Point the live week at a preset's split object so later edits write through. */
+function usePreset(preset){
+  if(!preset || !preset.split) return false;
+  DATA.activePresetId = preset.id;
+  preset.split.label = preset.name;
+  DATA.splits[DATA.activeSplit] = preset.split;
+  return true;
+}
+/* A day save, a copied day, or a sets change on the week in use. */
+function touchActivePreset(){
+  const preset = currentPreset();
+  if(!preset) return;
+  preset.savedAt = Date.now();
+  if(builtinPresetDef(preset)) preset.customized = true;
+  if(preset.split) preset.split.label = preset.name;
+}
+function storePreset(name, subtitle, split, activate){
+  const preset = {
+    id:uid(),
+    name:(name||'').trim(),
+    subtitle:(subtitle||'').trim(),
+    split:cloneSplit(split),
+    savedAt:Date.now(),
+    customized:false
+  };
+  preset.split.label = preset.name;
+  DATA.presets = DATA.presets || [];
+  DATA.presets.unshift(preset);
+  if(activate){
+    usePreset(preset);
+    syncActiveWorkoutFromSplit({replaceAll:true});
+  }
+  saveData(DATA);
+  return preset;
+}
+function overwritePresetFromActive(presetId){
+  const target = (DATA.presets||[]).find(p=>p.id===presetId);
+  if(!target || target.id===DATA.activePresetId || !target.split) return false;
+  target.split = cloneSplit(activeSplit());
+  target.split.label = target.name;
+  target.savedAt = Date.now();
+  if(builtinPresetDef(target)) target.customized = true;
+  saveData(DATA);
+  return true;
+}
+function switchToPreset(presetId){
+  const preset = (DATA.presets||[]).find(p=>p.id===presetId);
+  if(!preset || !usePreset(preset)) return false;
+  syncActiveWorkoutFromSplit({replaceAll:true});
+  saveData(DATA);
+  return true;
+}
+/* Built-in week, as shipped. If this preset is in use, Home follows the reset. */
+function resetBuiltinPreset(preset){
+  const def = builtinPresetDef(preset);
+  if(!def || !preset) return false;
+  preset.name = def.name;
+  preset.subtitle = def.subtitle;
+  preset.customized = false;
+  preset.split = def.build(DATA.exercises);
+  preset.savedAt = Date.now();
+  if(preset.id===DATA.activePresetId){
+    usePreset(preset);
+    syncActiveWorkoutFromSplit({replaceAll:true});
+  } else if(preset.split) preset.split.label = preset.name;
+  saveData(DATA);
+  return true;
+}
 function getExercise(id){ return DATA.exercises.find(e=>e.id===id); }
 function metricOf(ex){ return (ex && ex.metric) || 'weight_reps'; }
 function primaryOf(ex){ return (ex && (ex.primary || ex.muscleGroup)) || 'Other'; }
@@ -45,15 +116,16 @@ function searchExercises(term, pool){
 function exerciseSubtitle(ex){
   const bits = [primaryOf(ex), equipLabel(ex)];
   if(patternOf(ex)!=='other') bits.push(PATTERN_LABELS[patternOf(ex)]);
-  if(metricOf(ex)!=='weight_reps') bits.push(METRIC_LABELS[metricOf(ex)]);
+  if(metricOf(ex)!=='weight_reps' && !(typeof isTreadmill==='function' && isTreadmill(ex))) bits.push(METRIC_LABELS[metricOf(ex)]);
   return bits.join(' · ');
 }
 
 /* --- today's log & plan ---------------------------------------------
-   DATA.activeSplit is the current split. Home follows it. Saving a day,
-   copying a day, switching PPL / PPL + UL, or loading a preset refreshes
-   an in-progress workout and, when today already has a saved plan, the
-   hit list too. A hit list with no saved plan reads the split directly.
+   The preset in use (DATA.activePresetId) is the week Home follows.
+   DATA.splits[DATA.activeSplit] is that preset's split object. Saving a
+   day, copying a day, or switching presets refreshes an in-progress
+   workout and, when today already has a saved plan, the hit list too.
+   A hit list with no saved plan reads the split directly.
    sessionOnly rows were added for this workout only. hiddenExerciseIds
    are split exercises removed from this workout without deleting them
    from the split. */
@@ -80,6 +152,25 @@ function warmupsForLog(log){
   if(Array.isArray(log.warmups)) return log.warmups;
   return routineForLog(log).warmups || [];
 }
+/* A swapped day still on the everyday basics warms up that day's muscles.
+   A day edited in Split keeps its own list. The usual weekday is unchanged. */
+function warmupsForSwappedSession(log, routine){
+  routine = routine || routineForLog(log);
+  const saved = routine.warmups || [];
+  const swapped = !!(log && !log.customSession && log.dayKey && log.dayKey!==weekdayKey());
+  if(swapped && isDefaultWarmupList(saved))
+    return suggestWarmupsForExercises(routine.exercises || []);
+  return clone(saved);
+}
+/* Custom sessions start empty. Once exercises are on the plan and nothing
+   is checked off, fill warm-ups from those muscles. A check locks the list. */
+function refreshCustomSessionWarmups(log){
+  if(!log || !log.customSession) return;
+  if(Array.isArray(log.warmupDone) && log.warmupDone.length) return;
+  const plan = Array.isArray(log.plan) ? log.plan : [];
+  if(!plan.length) return;
+  log.warmups = suggestWarmupsForExercises(plan);
+}
 function ensurePlanSnapshot(log){
   persistLog(log);
   const routine = routineForLog(log);
@@ -91,7 +182,7 @@ function ensurePlanSnapshot(log){
     dirty = true;
   }
   if(!Array.isArray(log.warmups)){
-    log.warmups = clone(routine.warmups || []);
+    log.warmups = warmupsForSwappedSession(log, routine);
     dirty = true;
   }
   if(!Array.isArray(log.warmupDone)){ log.warmupDone = []; dirty = true; }
@@ -103,6 +194,109 @@ function splitDayFor(dayKey){
 }
 function exerciseInSplit(dayKey, exerciseId){
   return (splitDayFor(dayKey).exercises || []).some(r=>r.exerciseId===exerciseId);
+}
+/* Every split day that already lists this exercise, in week order.
+   One entry per day (first row on that day). */
+function splitOccurrencesForExercise(exerciseId){
+  const days = splitDays();
+  const out = [];
+  DAY_ORDER.forEach(dk=>{
+    const day = days[dk];
+    if(!day || !Array.isArray(day.exercises)) return;
+    const row = day.exercises.find(r=> r && r.exerciseId===exerciseId);
+    if(row) out.push({dayKey:dk, row});
+  });
+  return out;
+}
+function exerciseOnActiveSplit(exerciseId){
+  return splitOccurrencesForExercise(exerciseId).length>0;
+}
+function warmupSplitHits(item){
+  const days = splitDays();
+  const title = warmupTitleKey(item);
+  const out = [];
+  DAY_ORDER.forEach(dk=>{
+    const day = days[dk];
+    if(!day || !Array.isArray(day.warmups)) return;
+    const hit = day.warmups.some(w=> w && ((item && item.id && w.libraryId===item.id) || warmupTitleKey(w)===title));
+    if(hit) out.push(dk);
+  });
+  return out;
+}
+function warmupOnActiveSplit(item){
+  return warmupSplitHits(item).length>0;
+}
+/* Preview row for the Edit list: a split day row, or the saved default / built-in. */
+function previewPlanForExercise(exerciseId){
+  const hits = splitOccurrencesForExercise(exerciseId);
+  if(hits.length) return clone(hits[0].row);
+  return newPlanRow(exerciseId, {goal:DATA.settings.goal});
+}
+function applyPlanFieldsToRow(row, fields){
+  if(!row || !fields) return row;
+  row.sets = fields.sets;
+  row.repsMin = fields.repsMin;
+  row.repsMax = fields.repsMax;
+  row.rpe = fields.rpe;
+  row.notes = fields.notes||'';
+  row.restSeconds = fields.restSeconds;
+  row.loadStep = fields.loadStep;
+  row.equipment = fields.equipment;
+  row.oftenDoneAsDropSet = !!fields.oftenDoneAsDropSet;
+  return row;
+}
+function planFieldsSnapshot(row){
+  return {
+    sets: row.sets,
+    repsMin: row.repsMin,
+    repsMax: row.repsMax,
+    rpe: row.rpe!=null ? row.rpe : null,
+    notes: row.notes||'',
+    restSeconds: row.restSeconds!=null ? row.restSeconds : null,
+    loadStep: (typeof row.loadStep==='number' && row.loadStep>0) ? row.loadStep : null,
+    equipment: row.equipment || null,
+    oftenDoneAsDropSet: !!row.oftenDoneAsDropSet
+  };
+}
+/* A set saved at the start of a plank or treadmill countdown. It is not
+   finished until Stop or the timer. holdRemainingMs lives with the clock. */
+function holdInProgress(set){
+  if(!set || typeof set.holdStartedAt!=='number') return false;
+  if(typeof holdRemainingMs==='function') return holdRemainingMs(set)>0;
+  return true;
+}
+/* Today, then backward through the week. Friday finds Thursday's walk
+   before Wednesday's. */
+function nearestSplitRow(exerciseId, fromDay){
+  const days = splitDays();
+  const start = DAY_KEYS.indexOf(fromDay || weekdayKey());
+  const origin = start<0 ? 0 : start;
+  for(let step=0; step<7; step++){
+    const dk = DAY_KEYS[(origin - step + 7) % 7];
+    const list = days[dk] && days[dk].exercises;
+    if(!list) continue;
+    const row = list.find(r=> r && r.exerciseId===exerciseId);
+    if(row) return row;
+  }
+  return null;
+}
+function planRowForNewExercise(exerciseId, opts){
+  opts = opts || {};
+  const found = nearestSplitRow(exerciseId, opts.dayKey);
+  if(!found) return newPlanRow(exerciseId, opts);
+  return {
+    exerciseId,
+    sets: found.sets,
+    repsMin: found.repsMin,
+    repsMax: found.repsMax,
+    rpe: found.rpe!=null ? found.rpe : null,
+    notes: found.notes||'',
+    restSeconds: found.restSeconds!=null ? found.restSeconds : null,
+    loadStep: (typeof found.loadStep==='number' && found.loadStep>0) ? found.loadStep : null,
+    equipment: found.equipment || null,
+    supersetId: null,
+    oftenDoneAsDropSet: !!found.oftenDoneAsDropSet
+  };
 }
 function dissolveTinySupersets(rows){
   const counts = {};
@@ -120,6 +314,7 @@ function absorbQueuedExercises(log){
     copy.sessionOnly = true;
     plan.push(copy);
   });
+  refreshCustomSessionWarmups(log);
   return plan;
 }
 /* The log Home is showing. An in-progress workout wins. Otherwise, a
@@ -183,7 +378,7 @@ function applyTodaySession(kind, dayKey){
     log.plan = clone(routine.exercises || []);
     log.plan.forEach(row=>{ row.sessionOnly = false; });
     log.planName = routine.name || 'Workout';
-    log.warmups = clone(routine.warmups || []);
+    log.warmups = warmupsForSwappedSession(log, routine);
   } else {
     log.customSession = false;
     log.dayKey = weekdayKey();
@@ -206,6 +401,7 @@ function commitExerciseToSplit(log, exerciseId){
   }
   const sessionRow = (log.plan||[]).find(r=>r.exerciseId===exerciseId);
   if(sessionRow) sessionRow.sessionOnly = false;
+  touchActivePreset();
   saveData(DATA);
   showToast('Added to your split');
   renderApp();
@@ -238,11 +434,12 @@ function addExerciseToActiveWorkout(exerciseId){
   persistLog(log);
   const plan = ensurePlanSnapshot(log);
   if(plan.some(r=>r.exerciseId===exerciseId)){ showToast('Already in this workout'); return; }
-  const row = newPlanRow(exerciseId,{goal:DATA.settings.goal});
   const dayKey = log.dayKey || weekdayKey();
+  const row = planRowForNewExercise(exerciseId,{goal:DATA.settings.goal, dayKey});
   const inSplit = !log.customSession && exerciseInSplit(dayKey, exerciseId);
   row.sessionOnly = !inSplit;
   plan.splice(indexAfterStarted(log, plan, new Set()), 0, row);
+  refreshCustomSessionWarmups(log);
   saveData(DATA);
   renderApp();
   scrollCardIntoView(exerciseId);
@@ -292,7 +489,7 @@ function queueExerciseForToday(exerciseId){
   const inSplit = exerciseInSplit(dayKey, exerciseId);
   const queued = log.queued.some(r=>r.exerciseId===exerciseId);
   if(inSplit || queued){ showToast("Already in today's plan"); return; }
-  const row = newPlanRow(exerciseId,{goal:DATA.settings.goal});
+  const row = planRowForNewExercise(exerciseId,{goal:DATA.settings.goal, dayKey});
   row.sessionOnly = true;
   log.queued.push(row);
   saveData(DATA);
@@ -300,8 +497,10 @@ function queueExerciseForToday(exerciseId){
   renderApp();
 }
 function setsInLogFor(log, exerciseId){ return log.sets.filter(s=>s.exerciseId===exerciseId); }
-function workingSetsInLogFor(log, exerciseId){ return log.sets.filter(s=>s.exerciseId===exerciseId && !s.isWarmup); }
-function workingSetCount(sets){ return (sets||[]).filter(s=>!s.isWarmup).length; }
+function workingSetsInLogFor(log, exerciseId){
+  return log.sets.filter(s=>s.exerciseId===exerciseId && !s.isWarmup && !holdInProgress(s));
+}
+function workingSetCount(sets){ return (sets||[]).filter(s=>!s.isWarmup && !holdInProgress(s)).length; }
 
 /* Groups plan rows for display. Rows sharing a supersetId are gathered into
    one visual group (in the order they first appear); everything else is

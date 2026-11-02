@@ -6,9 +6,12 @@ function loadLabel(weight, metric){
   return `${weight}${units()}`;
 }
 /* Plank, side plank and treadmill are logged as minutes. Stored duration stays seconds. */
+function isTreadmill(ex){
+  return ((ex && ex.name) || '').toLowerCase().includes('treadmill');
+}
 function isMinuteHold(ex){
   const name = ((ex && ex.name) || '').toLowerCase();
-  return name.includes('plank') || name.includes('treadmill');
+  return name.includes('plank') || isTreadmill(ex);
 }
 function resolveExercise(set, ex){
   if(ex) return ex;

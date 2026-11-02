@@ -7,6 +7,7 @@ catch(err){ console.error(APP_NAME+': demo cleanup failed', err); }
 try{ upgradePrFlags(); }
 catch(err){ console.error(APP_NAME+': PR re-rank failed', err); }
 renderApp();
+if(typeof spotterArmAudio==='function') spotterArmAudio();
 resumeHoldCountdown();
 
 document.addEventListener('visibilitychange', ()=>{

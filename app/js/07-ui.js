@@ -145,11 +145,93 @@ function hapticTick(strong){
     if(strong) setTimeout(()=> H.impact({style:'HEAVY'}).catch(()=>{}), 140);
   } else if(navigator.vibrate) navigator.vibrate(strong ? [35,90,35] : 12);
 }
+const SPOTTER_HAPTIC = {
+  tap:[8], setLogged:[12], hardSet:[18], bumpUnlocked:[10,40,10], pr:[15,50,15,50,30], error:[30,40,30]
+};
+function haptic(name){
+  try{
+    if(typeof spotterSettings==='function' && spotterSettings().haptics===false) return;
+    const pattern = SPOTTER_HAPTIC[name] || SPOTTER_HAPTIC.tap;
+    const H = capPlugin('Haptics');
+    if(H && typeof H.impact==='function'){
+      const style = (name==='pr' || name==='hardSet' || name==='error') ? 'HEAVY' : (name==='bumpUnlocked' ? 'MEDIUM' : 'LIGHT');
+      pattern.forEach((ms, i)=>{
+        if(i%2===1) return;
+        const delay = pattern.slice(0, i).reduce((sum, n)=> sum+n, 0);
+        const fire = ()=> H.impact({style}).catch(()=>{});
+        if(delay) setTimeout(fire, delay); else fire();
+      });
+      return;
+    }
+    if(navigator.vibrate) navigator.vibrate(pattern.length===1 ? pattern[0] : pattern);
+  }catch(e){}
+}
+let spotterAudio = null;
+function spotterEnsureAudio(){
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return null;
+    if(!spotterAudio) spotterAudio = new AC();
+    if(spotterAudio.state==='suspended') spotterAudio.resume();
+    return spotterAudio;
+  }catch(e){ return null; }
+}
+function spotterArmAudio(){
+  if(spotterArmAudio.armed) return;
+  spotterArmAudio.armed = true;
+  document.addEventListener('pointerdown', ()=>{
+    if(typeof spotterSettings==='function' && !spotterSettings().sound) return;
+    spotterEnsureAudio();
+  }, {passive:true});
+}
+function soundFx(name){
+  try{
+    if(typeof spotterSettings==='function' && !spotterSettings().sound) return;
+    const ctx = spotterEnsureAudio();
+    if(!ctx) return;
+    const now = ctx.currentTime;
+    const beep = (freq, t, dur)=>{
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.08, t+0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t+dur+0.02);
+    };
+    if(name==='pr'){
+      beep(523, now, 0.09);
+      beep(659, now+0.09, 0.09);
+      beep(784, now+0.18, 0.09);
+    } else beep(880, now, 0.04);
+  }catch(e){}
+}
+const spotterFelt = new Set();
+function spotterFeelOnce(id, name){
+  const key = String(id||'')+':'+String(name||'');
+  if(spotterFelt.has(key)) return false;
+  spotterFelt.add(key);
+  if(spotterFelt.size>80) spotterFelt.delete(spotterFelt.values().next().value);
+  return true;
+}
 /* The exercise card's coach line gives the feedback; only PRs earn a toast. */
-function celebrateSets(sets, milestone){
-  const pr = sets.some(s=>s.isPR);
-  if(pr) showToast('🏆 New personal record! You crushed it!', true);
-  hapticTick(pr || !!milestone);
+function celebrateSets(sets){
+  const list = (sets||[]).filter(Boolean);
+  const pr = list.find(s=> s.isPR);
+  if(pr){
+    const ex = getExercise(pr.exerciseId);
+    const label = ex && typeof setValueText==='function' ? setValueText(pr, metricOf(ex), ex) : '';
+    showToast(label ? ('New PR. '+label) : 'New PR.', true);
+    if(spotterFeelOnce(pr.id, 'confetti') && typeof showPrConfetti==='function') showPrConfetti();
+  }
+  list.forEach(set=>{
+    const name = typeof spotterHapticFor==='function' ? spotterHapticFor(set) : (set.isPR ? 'pr' : 'setLogged');
+    if(!spotterFeelOnce(set.id, name)) return;
+    haptic(name);
+    soundFx(name==='pr' ? 'pr' : 'setLogged');
+  });
 }
 function celebrateSet(set, milestone){ celebrateSets([set], milestone); }
 function confirmAction(message, confirmLabel, onConfirm){
@@ -1154,6 +1236,7 @@ function beginHoldCountdown(set){
   clearRunningHolds();
   stopRestTimer(WORKOUT_REST_ID);
   set.holdStartedAt = Date.now();
+  recomputePRs(set.exerciseId);
   saveData(DATA);
   ensureHoldTicker();
   scheduleHoldNotification(set);
@@ -1192,6 +1275,7 @@ function completeActiveHold(set){
   }
   holdAlerted.add(id);
   refreshTimerBar();
+  if(VIEW==='today' && homeScreen==='workout') renderApp();
   restAfterHold(set);
 }
 function stopActiveHold(){
@@ -1234,9 +1318,12 @@ function tickHolds(){
   }
   const set = findActiveHold(log);
   if(!set){ clearHoldTicker(); return; }
-  const node = document.querySelector('[data-holdcountdown]');
+  const text = holdRemainingText(set);
+  qa('[data-holdcountdown]').forEach(node=>{
+    if(node.dataset.holdcountdown!==set.id) return;
+    paintSlotClock(node, text, true);
+  });
   const fill = document.querySelector('[data-holdfill]');
-  if(node) paintSlotClock(node, holdRemainingText(set), true);
   if(fill) fill.style.width = `${holdProgressPct(set)}%`;
 }
 function resumeHoldCountdown(){

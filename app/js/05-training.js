@@ -2,6 +2,1483 @@
    Everything that decides "how good was that set" and "what next" lives
    here. No DOM access in this section. */
 
+/* ===== SPOTTER ENGINE (pure functions) =====
+   Double progression for the next session and the set just logged.
+   No DOM, no localStorage, no app data. Callers pass plain objects. */
+
+function spotterFeel(value){
+  if(value==null || value==='') return 'med';
+  const k = String(value).toLowerCase();
+  if(k==='easy' || k==='e') return 'easy';
+  if(k==='hard' || k==='h') return 'hard';
+  if(k==='med' || k==='medium' || k==='m') return 'med';
+  return 'med';
+}
+function spotterRoundToJump(weight, jump){
+  const j = jump > 0 ? jump : 2.5;
+  const steps = Math.round((Number(weight) / j) + 1e-9);
+  return Math.round(steps * j * 100) / 100;
+}
+function spotterNum(n){
+  if(n==null || !isFinite(Number(n))) return '';
+  const r = Math.round(Number(n) * 100) / 100;
+  return Math.abs(r - Math.round(r)) < 0.001 ? String(Math.round(r)) : String(r);
+}
+function spotterKg(n){
+  const t = spotterNum(n);
+  return t ? t + ' kg' : '';
+}
+function spotterRangeText(min, max){
+  const a = Math.round(Number(min)||0), b = Math.round(Number(max)||0);
+  const lo = Math.min(a,b), hi = Math.max(a,b);
+  return lo===hi ? String(lo) : lo + '–' + hi;
+}
+function spotterTargetText(targets){
+  if(!targets || !targets.length) return '';
+  const labels = targets.map(t => spotterRangeText(t[0], t[1]));
+  return labels.every(l => l===labels[0]) ? labels[0] : labels.join(', ');
+}
+function spotterEquipBucket(equipment){
+  const e = String(equipment||'').toLowerCase();
+  if(e==='barbell' || e==='smith' || e==='bb') return 'barbell';
+  if(e==='dumbbell' || e==='kettlebell' || e==='db') return 'dumbbell';
+  if(e==='cable' || e==='band') return 'cable';
+  if(e==='bodyweight' || e==='bw') return 'bodyweight';
+  return 'machine';
+}
+function spotterInferEquipment(name){
+  const t = String(name||'').toLowerCase();
+  if(!t) return null;
+  if(/\b(barbell|bb)\b/.test(t) || t.includes('barbell')) return 'barbell';
+  if(/\b(dumbbell|db)\b/.test(t) || t.includes('dumbbell')) return 'dumbbell';
+  if(t.includes('cable')) return 'cable';
+  if(t.includes('machine') || t.includes('leg press') || t.includes('pec deck') || t.includes('pulldown')) return 'machine';
+  if(/pull-?up|chin-?up|\bdips?\b|push-?up|plank/.test(t)) return 'bodyweight';
+  return null;
+}
+/* Plan-row override, then the library, then the name, then machine.
+   A catalog equipment value is never replaced by a name guess. */
+function spotterEquipment(row, exercise){
+  if(row && typeof row.equipment==='string' && row.equipment) return row.equipment;
+  const lib = exercise && exercise.equipment;
+  if(lib && lib!=='other') return lib;
+  return spotterInferEquipment(exercise && exercise.name) || lib || 'machine';
+}
+function spotterParseRange(text){
+  if(text==null || text==='') return null;
+  if(typeof text==='number' && isFinite(text)){
+    const n = Math.round(text);
+    if(n<=0) return null;
+    return [Math.max(1, n-2), n];
+  }
+  const s = String(text).trim().toLowerCase().replace(/[–—]/g,'-');
+  const pair = s.match(/(\d+)\s*(?:-|to)\s*(\d+)/);
+  if(pair){
+    const a = parseInt(pair[1],10), b = parseInt(pair[2],10);
+    if(a>0 && b>0) return [Math.min(a,b), Math.max(a,b)];
+  }
+  if(/^\d+$/.test(s)){
+    const n = parseInt(s,10);
+    return [Math.max(1, n-2), n];
+  }
+  return null;
+}
+function spotterRepRange(row, exercise){
+  const min = row && row.repsMin, max = row && row.repsMax;
+  if(typeof min==='number' && typeof max==='number' && min>0 && max>0)
+    return [Math.min(min,max), Math.max(min,max)];
+  const parsed = spotterParseRange(row && (row.reps!=null ? row.reps : row.repRange));
+  if(parsed) return parsed;
+  if(typeof min==='string' || typeof max==='string'){
+    const joined = (min!=null && max!=null) ? (min+' to '+max) : (min!=null ? min : max);
+    const fromText = spotterParseRange(joined);
+    if(fromText) return fromText;
+  }
+  if(typeof min==='number' && min>0 && (max==null || max==='')) return [Math.max(1, Math.round(min)-2), Math.round(min)];
+  const name = String((exercise && exercise.name) || (row && row.name) || '').toLowerCase();
+  if(/curl|raise|extension|fly|kickback|pushdown|calf/.test(name)) return [10,15];
+  if(spotterEquipBucket(spotterEquipment(row, exercise))==='barbell') return [6,10];
+  return [8,12];
+}
+function spotterParseDate(v){
+  if(v instanceof Date && !isNaN(v.getTime())){
+    const d = new Date(v.getTime()); d.setHours(0,0,0,0); return d;
+  }
+  if(typeof v==='string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return new Date(v.slice(0,10)+'T00:00:00');
+  return null;
+}
+function spotterGapDays(from, today){
+  const a = spotterParseDate(from), b = spotterParseDate(today);
+  if(!a || !b) return null;
+  return Math.round((b.getTime()-a.getTime())/86400000);
+}
+function spotterWorkingFromRaw(sets, opts){
+  const repsOnly = !!(opts && opts.repsOnly);
+  const out = [];
+  (sets||[]).forEach(set=>{
+    if(!set || set.isWarmup || set.dropSegment || set.isDropSegment) return;
+    let reps, weight, feel, ts, isPR, id;
+    if(set.isDropSet){
+      const top = set.stages && set.stages[0];
+      if(!top) return;
+      reps = Number(top.reps);
+      weight = Number(top.weight);
+      if(repsOnly && !isFinite(weight)) weight = 0;
+      feel = spotterFeel(set.difficulty!=null ? set.difficulty : set.feel);
+      ts = set.ts||0; isPR = !!set.isPR; id = set.id||null;
+    } else {
+      reps = Number(set.reps);
+      weight = Number(set.weight);
+      if(repsOnly && !isFinite(weight)) weight = 0;
+      feel = spotterFeel(set.difficulty!=null ? set.difficulty : (set.feel!=null ? set.feel : null));
+      ts = set.ts||0; isPR = !!set.isPR; id = set.id||null;
+    }
+    if(!(reps>0) || !isFinite(weight) || weight<0) return;
+    out.push({reps, weight, feel, ts, isPR, id});
+  });
+  return out;
+}
+/* One past session: the most common working weight, and the sets at that weight. */
+function spotterNormalise(sets, meta){
+  meta = meta || {};
+  const working = spotterWorkingFromRaw(sets, {repsOnly: !!meta.repsOnly});
+  if(!working.length) return null;
+  const freq = new Map();
+  working.forEach(s=>{
+    const key = String(s.weight);
+    const row = freq.get(key) || {w:s.weight, n:0};
+    row.n += 1;
+    freq.set(key, row);
+  });
+  let W = working[0].weight, bestN = -1;
+  freq.forEach(row=>{
+    if(row.n>bestN || (row.n===bestN && row.w>W)){ bestN = row.n; W = row.w; }
+  });
+  const atW = working.filter(s=> Math.abs(s.weight-W)<0.001);
+  const total = atW.reduce((sum,s)=> sum+s.reps, 0);
+  return {
+    date: meta.date || null,
+    id: meta.id || null,
+    startedAt: meta.startedAt || 0,
+    W, n: atW.length, total,
+    sets: atW.map(s=>({reps:s.reps, feel:s.feel}))
+  };
+}
+function spotterSameWeight(a, b){ return Math.abs(Number(a)-Number(b))<0.001; }
+function spotterFillTargets(planned, sets, build){
+  const list = [];
+  const last = Math.max(0, (sets && sets.length) ? sets.length-1 : 0);
+  for(let i=0;i<planned;i++){
+    const src = sets && sets.length ? sets[Math.min(i, last)] : null;
+    list.push(build(src, i));
+  }
+  return list;
+}
+function spotterAddRepTarget(src, maxR){
+  const reps = src ? src.reps : maxR;
+  const feel = src ? src.feel : 'med';
+  const delta = feel==='easy' ? 2 : feel==='hard' ? 0 : 1;
+  const t = Math.min(maxR, reps + delta);
+  return [t, t];
+}
+function spotterStartPlan(hist, plannedSets, range, jump, today, opts){
+  opts = opts || {};
+  const minR = range[0], maxR = range[1];
+  const planned = Math.max(1, plannedSets||1);
+  const step = jump>0 ? jump : 2.5;
+  const bodyweight = !!opts.bodyweight;
+  hist = (hist||[]).filter(Boolean);
+  const blankTargets = spotterFillTargets(planned, [], ()=> [minR, maxR]);
+  if(!hist.length){
+    return {kind:'NEW_LIFT', message:'PLAN_NEW_LIFT', weight:null, targets:blankTargets, jump:step, gapDays:null, bodyweightBump:false};
+  }
+  const last = hist[0];
+  const W = Number(last.W)||0;
+  const sets = last.sets || [];
+  const gapDays = spotterGapDays(last.date, today);
+  const enough = last.n >= Math.min(2, planned);
+  const allTop = enough && sets.length>0 && sets.every(s=> s.reps>=maxR);
+  const allEasy = sets.length>0 && sets.every(s=> s.feel==='easy');
+  const mid = Math.ceil((minR+maxR)/2);
+  const easyOverride = enough && allEasy && sets.every(s=> s.reps>=mid);
+  const overshoot = allEasy && sets.every(s=> s.reps>=maxR+3);
+  const bwZero = bodyweight && !(W>0);
+  let plan;
+  if(allTop || easyOverride){
+    const steps = overshoot ? 2 : 1;
+    plan = {
+      kind:'BUMP', message:'PLAN_BUMP', jump:step,
+      weight: bwZero ? 0 : spotterRoundToJump(W + steps*step, step),
+      targets: spotterFillTargets(planned, sets, ()=> [minR, Math.min(maxR, minR+2)]),
+      bodyweightBump: bwZero
+    };
+  } else if(sets.some(s=> s.reps<minR)){
+    const prev = hist[1];
+    const prevMiss = !!(prev && spotterSameWeight(prev.W, W) && (prev.sets||[]).some(s=> s.reps<minR));
+    if(prevMiss){
+      if(bwZero){
+        plan = {kind:'DELOAD', message:'PLAN_DELOAD', weight:0, jump:step, bodyweightBump:false,
+          targets: spotterFillTargets(planned, sets, ()=> [minR, Math.min(maxR, minR+2)])};
+      } else {
+        const delta = Math.max(step, spotterRoundToJump(0.05*W, step));
+        let weight = spotterRoundToJump(W - delta, step);
+        if(weight >= W-1e-6) weight = spotterRoundToJump(W - step, step);
+        if(weight<0) weight = 0;
+        plan = {kind:'DELOAD', message:'PLAN_DELOAD', weight, jump:step, bodyweightBump:false,
+          targets: spotterFillTargets(planned, sets, ()=> [minR, Math.min(maxR, minR+2)])};
+      }
+    } else {
+      plan = {kind:'HOLD', message:'PLAN_HOLD', weight:W, jump:step, bodyweightBump:false,
+        targets: spotterFillTargets(planned, sets, src=>{
+          const t = Math.max(minR, src ? src.reps : minR);
+          return [t, t];
+        })};
+    }
+  } else {
+    const sameW = [];
+    for(let i=0;i<hist.length;i++){
+      if(spotterSameWeight(hist[i].W, W)) sameW.push(hist[i]);
+      else break;
+    }
+    let stallCount = 0;
+    for(let i=0;i<sameW.length-1;i++){
+      if(sameW[i].total <= sameW[i+1].total) stallCount++;
+      else break;
+    }
+    if(stallCount>=3){
+      plan = {kind:'RESET', message:'PLAN_RESET', jump:step, bodyweightBump:false,
+        weight: bwZero ? 0 : Math.max(step, spotterRoundToJump(W*0.9, step)),
+        targets: spotterFillTargets(planned, sets, ()=> [minR, Math.min(maxR, minR+2)])};
+    } else if(stallCount===2){
+      plan = {kind:'PLATEAU', message:'PLAN_PLATEAU', weight:W, jump:step, bodyweightBump:false,
+        targets: spotterFillTargets(planned, sets, src=> spotterAddRepTarget(src, maxR))};
+    } else {
+      plan = {kind:'ADD_REPS', message:'PLAN_ADD_REPS', weight:W, jump:step, bodyweightBump:false,
+        targets: spotterFillTargets(planned, sets, src=> spotterAddRepTarget(src, maxR))};
+    }
+  }
+  plan.gapDays = gapDays;
+  if(gapDays!=null && gapDays>28){
+    const dropped = bwZero ? 0 : spotterRoundToJump(W*0.9, step);
+    plan = {kind:'COMEBACK', message:'PLAN_COMEBACK', weight:dropped, jump:step, gapDays, gentle:false, bodyweightBump:false,
+      targets: spotterFillTargets(planned, sets, ()=> [minR, Math.min(maxR, minR+2)])};
+  } else if(gapDays!=null && gapDays>=15 && gapDays<=28 && plan.kind==='BUMP'){
+    plan = {kind:'COMEBACK', message:'PLAN_COMEBACK', weight:W, jump:step, gapDays, gentle:true, bodyweightBump:false,
+      targets: spotterFillTargets(planned, sets, ()=> [Math.max(minR, maxR-2), maxR])};
+  }
+  return plan;
+}
+function spotterOrderPair(lo, hi){
+  return lo<=hi ? [lo, hi] : [hi, lo];
+}
+/* The set just logged. Warm-ups and dropped segments return a silent tick. */
+function spotterLive(plan, todayWorking, justLogged, lastSession, range, opts){
+  opts = opts || {};
+  plan = plan || {};
+  const minR = range[0], maxR = range[1];
+  const step = (plan.jump>0 ? plan.jump : (opts.jump>0 ? opts.jump : 2.5));
+  const planned = Math.max(1, opts.plannedSets || (plan.targets ? plan.targets.length : 1));
+  if(!justLogged || justLogged.warmup || justLogged.isWarmup || justLogged.dropSegment || justLogged.isDropSegment){
+    return {silent:true, type:null, status:null, nextWeight:null, nextTarget:null, lastTime:null, wrap:null, prCopyKey:null};
+  }
+  const working = todayWorking || [];
+  const idx = Math.max(0, working.length-1);
+  const reps = Number(justLogged.reps)||0;
+  const weight = Number(justLogged.weight);
+  const feel = spotterFeel(justLogged.feel!=null ? justLogged.feel : justLogged.difficulty);
+  const targets = plan.targets || [];
+  const target = targets[Math.min(idx, Math.max(0, targets.length-1))] || [minR, maxR];
+  let status = 'on';
+  if(reps < target[0]) status = 'below';
+  else if(reps > target[1]) status = 'beat';
+  const first = idx===0;
+  const bwZero = !!opts.bodyweight && !(weight>0);
+  let nextWeight = isFinite(weight) ? weight : (plan.weight!=null ? plan.weight : 0);
+  let adjust = null;
+  if(first && feel==='easy' && reps >= maxR+2){
+    adjust = 'TOO_LIGHT';
+    nextWeight = bwZero ? 0 : spotterRoundToJump(weight + step, step);
+  } else if(first && feel==='hard' && reps < minR){
+    adjust = 'TOO_HEAVY';
+    nextWeight = bwZero ? 0 : Math.max(0, spotterRoundToJump(weight - step, step));
+  }
+  let nextTarget;
+  if(feel==='hard') nextTarget = spotterOrderPair(Math.max(minR, reps-2), Math.max(minR, reps-1));
+  else if(feel==='easy') nextTarget = spotterOrderPair(reps, Math.min(maxR, reps+1));
+  else nextTarget = spotterOrderPair(Math.max(minR, reps-1), reps);
+  const lastTime = lastSession && lastSession.sets && lastSession.sets[idx] ? lastSession.sets[idx].reps : null;
+  const isLast = working.length===planned;
+  const isExtra = working.length>planned;
+  const counted = working.slice(0, planned);
+  let wrap = null;
+  if(counted.length===planned){
+    const freq = new Map();
+    counted.forEach(s=>{
+      const row = freq.get(String(s.weight)) || {w:Number(s.weight)||0, n:0};
+      row.n += 1; freq.set(String(s.weight), row);
+    });
+    let todayW = Number(counted[0].weight)||0, bestN = -1;
+    freq.forEach(row=>{
+      if(row.n>bestN || (row.n===bestN && row.w>todayW)){ bestN = row.n; todayW = row.w; }
+    });
+    const atW = counted.filter(s=> spotterSameWeight(s.weight, todayW));
+    const total = atW.reduce((sum,s)=> sum + (Number(s.reps)||0), 0);
+    const earnedBump = atW.length>0 && atW.every(s=> s.reps>=maxR);
+    let cmp = 'same';
+    if(lastSession){
+      const up = todayW > lastSession.W+0.001 || (spotterSameWeight(todayW, lastSession.W) && total > lastSession.total);
+      const down = todayW < lastSession.W-0.001 || total < lastSession.total;
+      cmp = up ? 'progress' : down ? 'light' : 'same';
+    }
+    const bwBump = !!(opts.bodyweight && !(todayW>0) && earnedBump);
+    wrap = {
+      cmp, earnedBump, bodyweightBump: bwBump,
+      nextWeight: earnedBump ? (bwBump ? 0 : spotterRoundToJump(todayW + step, step)) : todayW,
+      nextReps: minR,
+      repsDelta: lastSession ? total - lastSession.total : null,
+      weightDelta: lastSession ? Math.round((todayW-lastSession.W)*100)/100 : null
+    };
+  }
+  let prCopyKey = null;
+  if(justLogged.isPR && !justLogged.isWarmup && !justLogged.isDropSet){
+    prCopyKey = opts.prKind || (opts.prior ? spotterPrKind(justLogged, opts.prior, minR) : null) || 'PR_E1RM';
+  }
+  let type = 'SET_ON_TARGET';
+  if(prCopyKey) type = prCopyKey;
+  else if(wrap && wrap.earnedBump && !isExtra) type = 'BUMP_UNLOCKED';
+  else if(adjust==='TOO_HEAVY') type = 'SET_TOO_HEAVY';
+  else if(adjust==='TOO_LIGHT') type = 'SET_TOO_LIGHT';
+  else if(status==='below') type = 'SET_BELOW_TARGET';
+  else if(isLast && !isExtra) type = wrap.cmp==='progress' ? 'WRAP_EX_PROGRESS' : wrap.cmp==='light' ? 'WRAP_EX_LIGHT' : 'WRAP_EX_SAME';
+  else if(status==='beat') type = 'SET_BEAT_TARGET';
+  else if(feel==='hard') type = 'SET_GRIND';
+  return {silent:false, type, status, nextWeight, nextTarget, lastTime, wrap, prCopyKey, adjust, idx, target, feel};
+}
+/* Read-only PR kind. The first working set of an exercise is a baseline, not a PR.
+   Warm-ups and dropped segments are ignored. Drop-set tops count as working sets. */
+function spotterPrKind(set, prior, minR){
+  const curList = spotterWorkingFromRaw([set]);
+  if(!curList.length) return null;
+  const cur = curList[0];
+  const past = spotterWorkingFromRaw(prior||[]);
+  if(!past.length) return null;
+  const floor = minR>0 ? minR : 1;
+  const priorQualified = past.filter(s=> s.reps>=floor);
+  const bestW = priorQualified.reduce((m,s)=> Math.max(m, s.weight), -Infinity);
+  const isWeight = cur.reps>=floor && priorQualified.length>0 && cur.weight > bestW+0.001;
+  const same = past.filter(s=> spotterSameWeight(s.weight, cur.weight));
+  const bestReps = same.reduce((m,s)=> Math.max(m, s.reps), 0);
+  const isReps = same.length>0 && cur.reps > bestReps;
+  let isE1 = false;
+  if(cur.reps<=12 && cur.weight>0){
+    const e1 = cur.weight * (1 + cur.reps/30);
+    let prevBest = -Infinity, any = false;
+    past.forEach(s=>{
+      if(!(s.reps>0) || s.reps>12 || !(s.weight>0)) return;
+      any = true;
+      prevBest = Math.max(prevBest, s.weight * (1 + s.reps/30));
+    });
+    isE1 = any && e1 > prevBest+1e-6;
+  }
+  if(isWeight) return 'PR_WEIGHT';
+  if(isE1) return 'PR_E1RM';
+  if(isReps) return 'PR_REPS';
+  return null;
+}
+function spotterClip(text, max){
+  const s = String(text||'').replace(/\s+/g,' ').trim();
+  if(s.length<=max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > Math.floor(max*0.55) ? cut.slice(0, sp) : cut).replace(/[.,;:]+$/,'').trim();
+}
+function spotterFill(str, ctx){
+  const raw = String(str==null ? '' : str).replace(/\{(\w+)\}/g, (_, k)=>{
+    return ctx && ctx[k]!=null ? String(ctx[k]) : '';
+  });
+  return raw.replace(/\s{2,}/g,' ').replace(/\s+([,.;])/g,'$1').replace(/\(\s*\)/g,'').trim();
+}
+function spotterCatalog(){
+  const C = {};
+  const add = (type, rows)=>{ C[type] = rows.map((r,i)=>({id:type+':'+i, h:r[0], n:r[1]})); };
+  add('GREET_FIRST_EVER', [
+    ['First session{name}.', 'Log honest working sets. Suggestions start next session.'],
+    ['Welcome{name}. Nothing logged yet.', 'Log honest working sets. Suggestions start next session.'],
+    ['Clean slate{name}.', 'Log honest working sets. Suggestions start next session.'],
+    ['Day one{name}.', 'Log honest working sets. Suggestions start next session.'],
+    ['No history yet{name}.', 'Log honest working sets. Suggestions start next session.'],
+    ['Start here{name}.', 'Log honest working sets. Suggestions start next session.'],
+    ['Empty log{name}. Good place to start.', 'Log honest working sets. Suggestions start next session.'],
+    ['Ready when you are{name}.', 'Log honest working sets. Suggestions start next session.']
+  ]);
+  add('GREET_MORNING', [
+    ['Morning{name}. {session}, {count} lifts.', '{watch}'],
+    ['Morning{name}. {session} is up.', '{watch}'],
+    ['Up for {session}{name}.', '{watch}'],
+    ['Morning{name}. {count} lifts on {session}.', '{watch}'],
+    ['Quiet morning{name}. {session}.', '{watch}'],
+    ['Morning{name}. The plan is {session}.', '{watch}'],
+    ['Good morning{name}. {session} today.', '{watch}'],
+    ['Morning session{name}. {session}.', '{watch}']
+  ]);
+  add('GREET_AFTERNOON', [
+    ['Afternoon{name}. {session}, {count} lifts.', '{watch}'],
+    ['Afternoon{name}. {session} is on.', '{watch}'],
+    ['Midday{name}. {session}, {count} lifts.', '{watch}'],
+    ['Afternoon{name}. Time for {session}.', '{watch}'],
+    ['{session} this afternoon{name}.', '{watch}'],
+    ['Afternoon block{name}. {session}.', '{watch}'],
+    ['Good afternoon{name}. {session}.', '{watch}'],
+    ['Afternoon{name}. {count} lifts, {session}.', '{watch}']
+  ]);
+  add('GREET_EVENING', [
+    ['Evening{name}. {session}, {count} lifts.', '{watch}'],
+    ['Evening{name}. {session} is on.', '{watch}'],
+    ['After hours{name}. {session}.', '{watch}'],
+    ['Evening{name}. {count} lifts on {session}.', '{watch}'],
+    ['Good evening{name}. {session}.', '{watch}'],
+    ['Night training{name}. {session}.', '{watch}'],
+    ['Evening session{name}. {session}.', '{watch}'],
+    ['{session} this evening{name}.', '{watch}']
+  ]);
+  add('GREET_LATE', [
+    ['Late session{name}. Respect.', 'Keep the sets honest.'],
+    ['Late one{name}. {session}.', 'Keep the sets honest.'],
+    ['The gym is quiet{name}.', 'Keep the sets honest.'],
+    ['Late {session}{name}.', 'Short and honest is enough.'],
+    ['Still here{name}. {session}.', 'Keep the sets honest.'],
+    ['After midnight{name}. Noted.', 'Keep the sets honest.'],
+    ['Late start{name}. {session}.', 'No extra drama. Just the sets.'],
+    ['Quiet hours{name}. {session}.', 'Keep the sets honest.']
+  ]);
+  add('GREET_REST_DAY', [
+    ['Rest day on the plan{name}.', 'Recovery counts as training.'],
+    ['Nothing scheduled{name}.', 'Rest, or take an optional session.'],
+    ['Plan says rest{name}.', 'Recovery counts as training.'],
+    ['Off day{name}.', 'You can rest, or train if you want.'],
+    ['Rest is the session{name}.', 'An optional workout is there if you want it.'],
+    ['No lifts on the plan{name}.', 'Recovery counts as training.'],
+    ['Scheduled rest{name}.', 'Take it, or start something light.'],
+    ['Rest day{name}.', 'The bar will be there tomorrow.']
+  ]);
+  add('GREET_BACK_SHORT', [
+    ['Back after a few days{name}.', '{watch}'],
+    ['A short break{name}. {session}.', '{watch}'],
+    ['Good to see the log again{name}.', '{watch}'],
+    ['A few days off{name}. {session}.', 'Pick up the same plan.'],
+    ['Back on {session}{name}.', '{watch}'],
+    ['Gap was short{name}.', '{watch}'],
+    ['You were away a few days{name}.', 'Same weights. Honest reps.'],
+    ['{session} again{name}.', '{watch}']
+  ]);
+  add('GREET_BACK_LONG', [
+    ['Welcome back{name}.', 'The bar waited.'],
+    ['It has been a while{name}.', 'Start smooth. No heroics.'],
+    ['Welcome back{name}. {session}.', 'Ease in. The plan can wait a week.'],
+    ['Long gap{name}. Noted, not judged.', 'Start a little lighter if you want.'],
+    ['The log missed you{name}.', 'The bar waited.'],
+    ['Back after a long break{name}.', 'First session back can be lighter.'],
+    ['Welcome back{name}.', 'Pick a weight you can own.'],
+    ['Been away{name}. {session} is here.', 'Smooth sets beat a heroic one.']
+  ]);
+  add('GREET_ALREADY_DONE', [
+    ['Already trained today{name}.', 'Reopen it, or leave it as it stands.'],
+    ['Today is in the log{name}.', 'You can add a set, or call it done.'],
+    ['Session saved{name}.', 'Reopen if something is missing.'],
+    ['You trained today{name}.', 'That session already counts.'],
+    ['Done for today{name}.', 'The log has this one.'],
+    ['Today is banked{name}.', 'Add more only if you mean it.'],
+    ['Second look{name}?', 'Today’s workout is already there.'],
+    ['Logged{name}.', 'Rest is allowed now.']
+  ]);
+  add('GREET_WEEK_COMPLETE', [
+    ['Week complete{name}.', '{n} of {m} sessions done.'],
+    ['That’s the week{name}.', '{n} of {m} sessions done.'],
+    ['Every planned session{name}.', '{n} of {m} this week.'],
+    ['Week closed{name}.', '{n} of {m} sessions done.'],
+    ['Full week{name}.', 'You hit every planned day.'],
+    ['The plan is done{name}.', '{n} of {m} sessions done.'],
+    ['All sessions in{name}.', '{n} of {m} this week.'],
+    ['Week complete{name}. Nice.', '{n} of {m} sessions done.']
+  ]);
+  add('PLAN_NEW_LIFT', [
+    ['New lift.', 'Find a weight for {range} reps that feels Medium-Hard.'],
+    ['First time on this.', 'Find a weight for {range} reps that feels Medium-Hard.'],
+    ['No history yet.', 'Pick a weight for {range} you could do again.'],
+    ['Find the weight.', 'Aim for {range} reps, Medium or Hard.'],
+    ['Start honest.', 'A {range} rep weight you can repeat.'],
+    ['Blank page.', 'Find a {range} rep weight. Medium-Hard.']
+  ]);
+  add('PLAN_HOLD', [
+    ['Hold the weight.', '{w} today. Targets {targets}.'],
+    ['Same load today.', 'Stay at {w}. Aim {targets}.'],
+    ['Stay and rebuild.', '{w}. Hit {targets}.'],
+    ['Keep this weight.', '{w} x {targets}.'],
+    ['Not a deload yet.', 'One more session at {w}. Aim {targets}.'],
+    ['Hold {w}.', 'Targets {targets}.']
+  ]);
+  add('PLAN_ADD_REPS', [
+    ['Add a rep or two.', '{w}. Targets {targets}.'],
+    ['Same weight, more reps.', '{w} x {targets}.'],
+    ['Reps before weight.', 'Stay at {w}. Aim {targets}.'],
+    ['Build the set.', '{w}. Next targets {targets}.'],
+    ['Chase the range.', '{w} x {targets}.'],
+    ['One more, if it’s there.', '{w}. Aim {targets}.']
+  ]);
+  add('PLAN_BUMP', [
+    ['Time to add weight.', 'Next: {w} x {targets}.'],
+    ['You earned the jump.', '{w} x {targets}.'],
+    ['Load goes up.', 'Try {w} x {targets}.'],
+    ['The reps are there.', '{w} x {targets} this session.'],
+    ['Top of the range.', 'Move to {w} x {targets}.'],
+    ['Ready for more weight.', '{w} x {targets}.']
+  ]);
+  add('PLAN_DELOAD', [
+    ['A small step down.', '{w} x {targets}. Then rebuild.'],
+    ['Ease the load.', '{w}. Targets {targets}.'],
+    ['Too heavy, twice.', 'Drop to {w} x {targets}.'],
+    ['Lighter bar today.', '{w} x {targets}.'],
+    ['Back off one step.', '{w}. Aim {targets}.'],
+    ['Deload, then climb.', '{w} x {targets}.']
+  ]);
+  add('PLAN_RESET', [
+    ['Time for a small reset.', '{w} and rebuild. Not a step back.'],
+    ['Back off and rebuild.', '{w} x {targets}.'],
+    ['The bar is stuck.', 'Reset to {w}. Targets {targets}.'],
+    ['A reset, then we climb.', '{w} x {targets}.'],
+    ['Ten percent off.', '{w}. Aim {targets}.'],
+    ['Lighter load, same plan.', '{w} x {targets}.']
+  ]);
+  add('PLAN_PLATEAU', [
+    ['The bar is stubborn.', 'Try one extra rep. {w} x {targets}.'],
+    ['Flat for a bit.', 'Same {w}. Targets {targets}.'],
+    ['Reps have stalled.', 'Hold {w}. Aim {targets}.'],
+    ['Same weight, again.', '{w} x {targets}.'],
+    ['This weight is sticky.', 'One more rep at {w}. {targets}.'],
+    ['Third time here.', 'Stay at {w}. Targets {targets}.']
+  ]);
+  add('PLAN_COMEBACK', [
+    ['Welcome back.', '{comeback}'],
+    ['Ease in today.', '{comeback}'],
+    ['The bar waited.', '{comeback}'],
+    ['Start a little smoother.', '{comeback}'],
+    ['No hero set today.', '{comeback}'],
+    ['Pick it back up.', '{comeback}']
+  ]);
+  add('SET_ON_TARGET', [
+    ['Clean set.', 'Next: {nextw} x {target}{lastbit}'],
+    ['Right on it.', 'Stay at {nextw}. Aim {target}{lastbit}'],
+    ['That one counts.', 'Next set {nextw} x {target}{lastbit}'],
+    ['In the pocket.', 'Same weight. {target} reps{lastbit}'],
+    ['Solid rep.', 'Hold {nextw}. Target {target}{lastbit}'],
+    ['On the number.', 'Next: {target} at {nextw}{lastbit}'],
+    ['Nice and tidy.', '{nextw} again. Aim {target}{lastbit}'],
+    ['Held the line.', 'Aim {target}{lastbit}']
+  ]);
+  add('SET_BEAT_TARGET', [
+    ['Above the target.', 'Next: {nextw} x {target}{lastbit}'],
+    ['Extra reps. Noted.', 'Stay at {nextw}. Aim {target}{lastbit}'],
+    ['Past the top.', 'Next {nextw} x {target}{lastbit}'],
+    ['More than asked.', 'Same weight. {target}{lastbit}'],
+    ['You cleared it.', '{nextw} x {target} next{lastbit}'],
+    ['Over the number.', 'Aim {target} at {nextw}{lastbit}']
+  ]);
+  add('SET_BELOW_TARGET', [
+    ['Down a rep. Happens.', 'Same weight, aim {target}{lastbit}'],
+    ['Short of the target.', 'Stay at {nextw}. Aim {target}{lastbit}'],
+    ['Not quite.', 'Next: {nextw} x {target}{lastbit}'],
+    ['A rep light.', 'Hold {nextw}. Target {target}{lastbit}'],
+    ['Under the number.', 'Same {nextw}. Aim {target}{lastbit}'],
+    ['Close, not there.', 'Aim {target}{lastbit}']
+  ]);
+  add('SET_GRIND', [
+    ['Grinder. Counted.', 'Same weight, aim {target}{lastbit}'],
+    ['Hard, and it counts.', 'Stay at {nextw}. Aim {target}{lastbit}'],
+    ['That one fought back.', 'Next: {nextw} x {target}{lastbit}'],
+    ['Ugly and honest.', 'Hold {nextw}. Target {target}{lastbit}'],
+    ['Grind noted.', 'Same {nextw}. Aim {target}{lastbit}'],
+    ['Heavy, but it’s in.', 'Aim {target}{lastbit}']
+  ]);
+  add('SET_TOO_LIGHT', [
+    ['That looked light.', '{lightline}'],
+    ['Room to spare there.', '{lightline}'],
+    ['Easy for this range.', '{lightline}'],
+    ['The bar moved too well.', '{lightline}'],
+    ['Light set.', '{lightline}'],
+    ['You had more in you.', '{lightline}']
+  ]);
+  add('SET_TOO_HEAVY', [
+    ['Heavy day for {shortw}.', '{heavyline}'],
+    ['Too heavy for the range.', '{heavyline}'],
+    ['That weight won.', '{heavyline}'],
+    ['Reps fell off.', '{heavyline}'],
+    ['A step too much.', '{heavyline}'],
+    ['Back it off.', '{heavyline}']
+  ]);
+  add('WRAP_EX_PROGRESS', [
+    ['Ahead of last time.', '{wrapline}'],
+    ['Moved up.', '{wrapline}'],
+    ['Better than last session.', '{wrapline}'],
+    ['Progress, quietly.', '{wrapline}'],
+    ['That was a step up.', '{wrapline}'],
+    ['You beat last time.', '{wrapline}']
+  ]);
+  add('WRAP_EX_SAME', [
+    ['Same as last time.', '{wrapline}'],
+    ['Matched last session.', '{wrapline}'],
+    ['Level with last time.', '{wrapline}'],
+    ['A copy of last time.', '{wrapline}'],
+    ['No change today.', '{wrapline}'],
+    ['Held last session.', '{wrapline}']
+  ]);
+  add('WRAP_EX_LIGHT', [
+    ['Lighter than last time.', '{wrapline}'],
+    ['Down on last session.', '{wrapline}'],
+    ['A lighter day.', '{wrapline}'],
+    ['Short of last time.', '{wrapline}'],
+    ['Not last session’s total.', '{wrapline}'],
+    ['Back a bit. Fine.', '{wrapline}']
+  ]);
+  add('BUMP_UNLOCKED', [
+    ['Top of the range on every set.', '{bumpline}'],
+    ['Every set hit the top.', '{bumpline}'],
+    ['That’s the bump.', '{bumpline}'],
+    ['Weight goes up next time.', '{bumpline}'],
+    ['You cleared the range.', '{bumpline}'],
+    ['Next time is heavier.', '{bumpline}']
+  ]);
+  add('PR_WEIGHT', [
+    ['New PR. {pr}.', 'The bar noticed.'],
+    ['Heavier than ever.', '{pr}.'],
+    ['A weight PR.', '{pr}.'],
+    ['Best load so far.', '{pr}.'],
+    ['New top weight.', '{pr}.'],
+    ['PR. {pr}.', 'That weight is yours now.']
+  ]);
+  add('PR_REPS', [
+    ['Rep PR. {pr}.', 'Most you’ve done there.'],
+    ['More reps than ever.', '{pr}.'],
+    ['A rep record.', '{pr}.'],
+    ['Best set at this weight.', '{pr}.'],
+    ['New rep high.', '{pr}.'],
+    ['PR. {pr}.', 'Same bar, more reps.']
+  ]);
+  add('PR_E1RM', [
+    ['New estimated max.', '{pr}.'],
+    ['Best set on record.', '{pr}.'],
+    ['That set ranks first.', '{pr}.'],
+    ['PR. {pr}.', 'Highest estimate so far.'],
+    ['A new best set.', '{pr}.'],
+    ['Top set. {pr}.', 'Nothing logged beats it.']
+  ]);
+  add('WRAP_STRONG', [
+    ['Strong session.', '{summary}'],
+    ['That one moved.', '{summary}'],
+    ['Good work today.', '{summary}'],
+    ['The session landed.', '{summary}'],
+    ['Solid from the start.', '{summary}'],
+    ['A strong day.', '{summary}']
+  ]);
+  add('WRAP_STEADY', [
+    ['Steady session.', '{summary}'],
+    ['A normal day.', '{summary}'],
+    ['Work got done.', '{summary}'],
+    ['Even and useful.', '{summary}'],
+    ['Nothing flashy. It counts.', '{summary}'],
+    ['Right down the middle.', '{summary}']
+  ]);
+  add('WRAP_LIGHT', [
+    ['Lighter day, still counts.', '{summary}'],
+    ['A lighter session.', '{summary}'],
+    ['You trained. That counts.', '{summary}'],
+    ['Less weight, still a session.', '{summary}'],
+    ['A quieter day.', '{summary}'],
+    ['Short of last time. Fine.', '{summary}']
+  ]);
+  return C;
+}
+const SPOTTER_COPY = spotterCatalog();
+
+function spotterSelfTest(){
+  const range = [8,12], step = 2.5, planned = 3;
+  const results = [];
+  const check = (name, ok, extra)=>{
+    results.push({name, ok});
+    console.log((ok ? 'pass' : 'FAIL') + '  ' + name + (!ok && extra ? '  ' + extra : ''));
+  };
+  const eqW = (a,b)=> a==null && b==null || (a!=null && b!=null && Math.abs(a-b)<0.001);
+  const eqT = (a,b)=> a && b && a.length===b.length && a.every((t,i)=> t[0]===b[i][0] && t[1]===b[i][1]);
+  const mk = (rows, w, date)=>{
+    const sets = rows.map(r=>({reps:r[0], feel:r[1]}));
+    return {W:w==null?60:w, n:sets.length, total:sets.reduce((s,r)=>s+r.reps,0), sets, date: date || null};
+  };
+  const planOf = (sessions, today)=> spotterStartPlan(sessions, planned, range, step, today || null);
+  const expectPlan = (name, plan, message, weight, targets)=>{
+    const ok = plan.message===message && eqW(plan.weight, weight) && eqT(plan.targets, targets);
+    check(name, ok, JSON.stringify({message:plan.message, weight:plan.weight, targets:plan.targets}));
+  };
+  const t810 = [[8,10],[8,10],[8,10]];
+  const t1012 = [[10,12],[10,12],[10,12]];
+  expectPlan('1 bump 12/12/12', planOf([mk([[12,'med'],[12,'med'],[12,'hard']])]), 'PLAN_BUMP', 62.5, t810);
+  expectPlan('2 add reps 10/9/8', planOf([mk([[10,'med'],[9,'med'],[8,'hard']])]), 'PLAN_ADD_REPS', 60, [[11,11],[10,10],[8,8]]);
+  expectPlan('3 easy override', planOf([mk([[10,'easy'],[10,'easy'],[10,'easy']])]), 'PLAN_BUMP', 62.5, t810);
+  expectPlan('4 overshoot', planOf([mk([[15,'easy'],[15,'easy'],[15,'easy']])]), 'PLAN_BUMP', 65, t810);
+  expectPlan('5 hold', planOf([mk([[8,'hard'],[7,'hard'],[6,'hard']]), mk([[10,'med'],[10,'med'],[10,'med']])]), 'PLAN_HOLD', 60, [[8,8],[8,8],[8,8]]);
+  expectPlan('6 deload', planOf([mk([[7,'hard'],[6,'hard'],[6,'hard']]), mk([[7,'hard'],[7,'med'],[8,'med']])]), 'PLAN_DELOAD', 57.5, t810);
+  expectPlan('7 plateau', planOf([mk([[10,'med'],[9,'med'],[8,'hard']]), mk([[10,'med'],[9,'med'],[8,'hard']]), mk([[10,'med'],[9,'med'],[8,'hard']])]), 'PLAN_PLATEAU', 60, [[11,11],[10,10],[8,8]]);
+  expectPlan('8 reset', planOf([mk([[10,'med'],[9,'med'],[8,'hard']]), mk([[10,'med'],[9,'med'],[8,'hard']]), mk([[10,'med'],[9,'med'],[8,'hard']]), mk([[10,'med'],[9,'med'],[8,'hard']])]), 'PLAN_RESET', 55, t810);
+  const day = (n)=>{
+    const d = new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-n);
+    const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+    return y+'-'+m+'-'+dd;
+  };
+  const today = day(0);
+  expectPlan('9 comeback 25d', planOf([mk([[12,'med'],[12,'med'],[12,'hard']], 60, day(25))], today), 'PLAN_COMEBACK', 60, t1012);
+  expectPlan('10 comeback 40d', planOf([mk([[12,'med'],[12,'med'],[12,'hard']], 60, day(40))], today), 'PLAN_COMEBACK', 55, t810);
+  const basePlan = {kind:'ADD_REPS', weight:60, jump:2.5, targets:[[8,12],[9,9],[8,8]]};
+  const live11 = spotterLive(basePlan, [{weight:60,reps:15,feel:'easy'}], {weight:60,reps:15,feel:'easy'}, null, range, {plannedSets:3});
+  check('11 too light', live11.type==='SET_TOO_LIGHT' && eqW(live11.nextWeight, 62.5), live11.type+' '+live11.nextWeight);
+  const live12 = spotterLive(basePlan, [{weight:60,reps:6,feel:'hard'}], {weight:60,reps:6,feel:'hard'}, null, range, {plannedSets:3});
+  check('12 too heavy', live12.type==='SET_TOO_HEAVY' && eqW(live12.nextWeight, 57.5), live12.type+' '+live12.nextWeight);
+  const live13 = spotterLive(basePlan, [{weight:60,reps:10,feel:'med'}], {weight:60,reps:10,feel:'med'}, null, range, {plannedSets:3});
+  check('13 next target', eqT([live13.nextTarget], [[9,10]]), JSON.stringify(live13.nextTarget));
+  const straight = [
+    {weight:60,reps:12,difficulty:'med'},
+    {weight:60,reps:12,difficulty:'med'},
+    {weight:60,reps:12,difficulty:'hard'}
+  ];
+  const junked = straight.concat([
+    {isWarmup:true, weight:100, reps:20, difficulty:'easy'},
+    {isDropSegment:true, weight:20, reps:30, difficulty:'hard'},
+    {isDropSet:true, difficulty:'hard', stages:[{weight:60,reps:12},{weight:30,reps:15}]}
+  ]);
+  const na = spotterNormalise(straight), nb = spotterNormalise(junked);
+  const pa = spotterStartPlan([na], planned, range, step);
+  const pb = spotterStartPlan([nb], planned, range, step);
+  check('14 warmup and drops', na && nb && na.W===60 && nb.W===60 && pa.message==='PLAN_BUMP' && pb.message==='PLAN_BUMP' && eqW(pa.weight, pb.weight), JSON.stringify({a:na&&na.W, b:nb&&nb.W, pa:pa.message, pb:pb.message}));
+  const prior = [{weight:70, reps:8, difficulty:'med'}];
+  const junkPrior = prior.concat([
+    {isWarmup:true, weight:200, reps:10, difficulty:'easy'},
+    {isDropSegment:true, weight:180, reps:12, difficulty:'hard'}
+  ]);
+  check('14 pr ignores junk', spotterPrKind({weight:80,reps:8,difficulty:'hard'}, prior, 8)==='PR_WEIGHT'
+    && spotterPrKind({weight:80,reps:8,difficulty:'hard'}, junkPrior, 8)==='PR_WEIGHT'
+    && spotterPrKind({isWarmup:true, weight:90, reps:10}, prior, 8)==null);
+  check('14 first set is not a pr', spotterPrKind({weight:80,reps:8}, [], 8)==null);
+  check('range 8-12', eqT([spotterParseRange('8-12')], [[8,12]]));
+  check('range 8–12', eqT([spotterParseRange('8–12')], [[8,12]]));
+  check('range 8 to 12', eqT([spotterParseRange('8 to 12')], [[8,12]]));
+  check('range single', eqT([spotterParseRange('10')], [[8,10]]));
+  check('range barbell default', eqT([spotterRepRange({}, {name:'Squat', equipment:'barbell'})], [[6,10]]));
+  check('range curl default', eqT([spotterRepRange({}, {name:'Curl', equipment:'dumbbell'})], [[10,15]]));
+  check('range numbers win', eqT([spotterRepRange({repsMin:8, repsMax:12}, {name:'Curl', equipment:'barbell'})], [[8,12]]));
+  const need = type => (type.indexOf('GREET_')===0 || type==='SET_ON_TARGET') ? 8 : 6;
+  Object.keys(SPOTTER_COPY).forEach(type=>{
+    const list = SPOTTER_COPY[type];
+    check('copy '+type, list && list.length>=need(type), String(list && list.length));
+    (list||[]).forEach(t=>{
+      if(!/\{/.test(t.h)) check(t.id+' h', t.h.length<=36 && (t.h.match(/!/g)||[]).length<=1, t.h.length+' '+t.h);
+      if(!/\{/.test(t.n)) check(t.id+' n', t.n.length<=64 && (t.n.match(/!/g)||[]).length<=1, t.n.length+' '+t.n);
+    });
+  });
+  const failed = results.filter(r=> !r.ok).length;
+  console.log(failed ? (failed+' failed of '+results.length) : ('all passed ('+results.length+')'));
+  return failed===0;
+}
+window.spotterSelfTest = spotterSelfTest;
+/* ===== end SPOTTER ENGINE ===== */
+
+/* Spotter adapters. History cache, copy picker, and the view the screens render.
+   Still no DOM. localStorage holds only the ephemeral line picker. */
+let spotterHistCache = new Map();
+function spotterForget(exerciseId){
+  if(exerciseId) spotterHistCache.delete(exerciseId);
+  else spotterHistCache.clear();
+}
+function spotterNameKey(name){
+  return String(name||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+}
+function spotterUsesEngine(ex){
+  if(!ex) return false;
+  const metric = ex.metric || 'weight_reps';
+  return metric==='weight_reps' || metric==='weighted_bw' || metric==='reps_only';
+}
+function spotterBwMode(ex){
+  return !!(ex && (ex.metric==='reps_only' || ex.metric==='weighted_bw'));
+}
+function spotterDefaultJumps(){
+  return {barbell:2.5, dumbbell:2, machine:2.5, cable:2.5, bodyweight:2.5};
+}
+function spotterSettings(){
+  const d = (typeof defaultSpotterSettings==='function') ? defaultSpotterSettings() : {intensity:'normal', haptics:true, sound:false, jumps:spotterDefaultJumps()};
+  return {intensity:d.intensity, haptics:d.haptics!==false, sound:!!d.sound, jumps:d.jumps};
+}
+/* Same jump the weight stepper uses: split row, then the exercise, then the equipment default. */
+function spotterJumpFor(ex, row){
+  return loadStepFor(ex, row);
+}
+function spotterGroupsFor(exerciseId){
+  const ex = getExercise(exerciseId);
+  const key = spotterNameKey(ex && ex.name);
+  const direct = [];
+  (DATA.logs||[]).forEach(log=>{
+    const sets = (log.sets||[]).filter(set=> set && set.exerciseId===exerciseId);
+    if(sets.length) direct.push({log, sets: sets.slice()});
+  });
+  if(direct.length || !key) return direct;
+  const named = [];
+  (DATA.logs||[]).forEach(log=>{
+    const sets = [];
+    (log.sets||[]).forEach(set=>{
+      if(!set || set.exerciseId===exerciseId) return;
+      const other = getExercise(set.exerciseId);
+      if(other && spotterNameKey(other.name)===key) sets.push(set);
+    });
+    if(sets.length) named.push({log, sets});
+  });
+  return named;
+}
+function spotterBuildHistory(exerciseId){
+  const ex = getExercise(exerciseId);
+  const repsOnly = !!(ex && ex.metric==='reps_only');
+  const sessions = [];
+  spotterGroupsFor(exerciseId).forEach(({log, sets})=>{
+    sets.sort((a,b)=> (a.ts||0)-(b.ts||0));
+    const norm = spotterNormalise(sets, {date:log.date, id:log.id, startedAt:log.startedAt||0, repsOnly});
+    if(norm) sessions.push(norm);
+  });
+  sessions.sort((a,b)=>{
+    if(a.date!==b.date) return a.date<b.date ? 1 : -1;
+    return (b.startedAt||0)-(a.startedAt||0);
+  });
+  return sessions;
+}
+function spotterHistory(exerciseId){
+  if(!exerciseId) return [];
+  if(spotterHistCache.has(exerciseId)) return spotterHistCache.get(exerciseId);
+  const built = spotterBuildHistory(exerciseId);
+  spotterHistCache.set(exerciseId, built);
+  return built;
+}
+function spotterPast(exerciseId, log){
+  return spotterHistory(exerciseId).filter(s => !log || s.id!==log.id);
+}
+function spotterPriorRaw(exerciseId, set){
+  if(!set) return [];
+  const rows = [];
+  (DATA.logs||[]).forEach(log=>{
+    (log.sets||[]).forEach(s=>{
+      if(!s || s===set || s.id===set.id || s.exerciseId!==exerciseId) return;
+      if((s.ts||0)>(set.ts||0)) return;
+      rows.push(s);
+    });
+  });
+  return rows;
+}
+const SPOTTER_STORE_KEY = 'trackagain_spotter_v1';
+function spotterStoreRead(){
+  try{
+    const raw = localStorage.getItem(SPOTTER_STORE_KEY);
+    const data = raw ? JSON.parse(raw) : null;
+    if(!data || typeof data!=='object') return {used:{}, chosen:{}, sess:{}, lastFilled:''};
+    data.used = data.used && typeof data.used==='object' ? data.used : {};
+    data.chosen = data.chosen && typeof data.chosen==='object' ? data.chosen : {};
+    data.sess = data.sess && typeof data.sess==='object' ? data.sess : {};
+    if(typeof data.lastFilled!=='string') data.lastFilled = '';
+    return data;
+  }catch(e){ return {used:{}, chosen:{}, sess:{}, lastFilled:''}; }
+}
+function spotterStoreWrite(data){
+  try{ localStorage.setItem(SPOTTER_STORE_KEY, JSON.stringify(data)); }catch(e){}
+}
+function spotterBang(text, level){
+  const s = String(text||'');
+  if(level>=3){
+    let seen = false;
+    return s.replace(/!/g, ()=>{ if(seen) return ''; seen = true; return '!'; });
+  }
+  return s.replace(/!/g,'');
+}
+function spotterChooseLine(type, ctx, store){
+  const list = SPOTTER_COPY[type] || SPOTTER_COPY.SET_ON_TARGET || [];
+  if(!list.length) return {id:'none', h:'', n:''};
+  let used = store.used[type] ? store.used[type].slice() : [];
+  const free = ()=> list.filter(t => used.indexOf(t.id)<0);
+  let pool = free();
+  while(!pool.length && used.length){ used.shift(); pool = free(); }
+  if(!pool.length) pool = list.slice();
+  let pick = pool[Math.floor(Math.random()*pool.length)];
+  let filled = {h: spotterClip(spotterFill(pick.h, ctx), 36), n: spotterClip(spotterFill(pick.n, ctx), 64)};
+  if(store.lastFilled && pool.length>1){
+    const alt = pool.filter(t => spotterClip(spotterFill(t.h, ctx), 36)!==store.lastFilled);
+    if(alt.length){
+      pick = alt[Math.floor(Math.random()*alt.length)];
+      filled = {h: spotterClip(spotterFill(pick.h, ctx), 36), n: spotterClip(spotterFill(pick.n, ctx), 64)};
+    }
+  }
+  used.push(pick.id);
+  while(used.length>12) used.shift();
+  store.used[type] = used;
+  store.lastFilled = filled.h;
+  return {id:pick.id, h:filled.h, n:filled.n};
+}
+function spotterSess(store, logId){
+  const id = logId || 'none';
+  if(!store.sess[id]) store.sess[id] = {level3:{}, afterPr:{}, routine:{}};
+  const keys = Object.keys(store.sess);
+  while(keys.length>8) delete store.sess[keys.shift()];
+  return store.sess[id];
+}
+function spotterTakeFlags(store, scope, type){
+  const sess = spotterSess(store, scope.logId);
+  const ex = scope.exerciseId || '';
+  const pr = type==='PR_WEIGHT' || type==='PR_REPS' || type==='PR_E1RM';
+  const flags = {
+    prChip: pr && !!sess.level3[ex],
+    level3Used: !!sess.level3[ex],
+    afterPr: !!sess.afterPr[ex] && !pr,
+    routineSlot: sess.routine[ex]||0
+  };
+  const level = spotterLevel(type, flags, spotterSettings().intensity);
+  if(level===3 && ex) sess.level3[ex] = true;
+  if(level===3 && pr && ex) sess.afterPr[ex] = true;
+  else if(flags.afterPr && ex) sess.afterPr[ex] = false;
+  if(type==='SET_ON_TARGET' && ex) sess.routine[ex] = flags.routineSlot+1;
+  return flags;
+}
+function spotterLevel(type, flags, intensity){
+  flags = flags || {};
+  const pr = type==='PR_WEIGHT' || type==='PR_REPS' || type==='PR_E1RM';
+  if(pr) return flags.prChip ? 1 : 3;
+  if(intensity==='minimal') return 1;
+  if(type==='GREET_WEEK_COMPLETE' || type==='BUMP_UNLOCKED') return flags.level3Used ? 2 : 3;
+  if(type==='WRAP_EX_PROGRESS' && intensity==='hype') return flags.level3Used ? 2 : 3;
+  if(flags.afterPr) return 1;
+  if(intensity==='hype') return 2;
+  if(type==='SET_ON_TARGET' && flags.routineSlot%2===1) return 1;
+  return 2;
+}
+function spotterPresent(type, ctx, scope){
+  if(!type) return null;
+  scope = scope || {};
+  ctx = ctx || {};
+  const store = spotterStoreRead();
+  const key = scope.key || '';
+  let rec = key && store.chosen[key];
+  if(!rec){
+    const picked = spotterChooseLine(type, ctx, store);
+    rec = {type, h:picked.h, n:picked.n || ctx.fallback || '', id:picked.id, flags: spotterTakeFlags(store, scope, type)};
+    if(!rec.n) rec.n = ctx.fallback || 'Log the set.';
+    if(key){
+      store.chosen[key] = rec;
+      const keys = Object.keys(store.chosen);
+      while(keys.length>40) delete store.chosen[keys.shift()];
+    }
+    spotterStoreWrite(store);
+  }
+  const level = spotterLevel(rec.type || type, rec.flags||{}, spotterSettings().intensity);
+  const headline = level>=2 ? spotterBang(rec.h, level) : '';
+  const numbers = level>=1 ? spotterBang(rec.n, level) : '';
+  return {type, level, headline, numbers, prChip: !!(rec.flags && rec.flags.prChip), templateId: rec.id};
+}
+function spotterMessageCtx(plan, live, extra){
+  extra = extra || {};
+  const range = extra.range || [8,12];
+  const jump = plan && plan.jump>0 ? plan.jump : 2.5;
+  const loadLabel = (kg)=> (extra.bodyweight && !(Number(kg)>0)) ? 'bodyweight' : (kg!=null && isFinite(Number(kg)) ? spotterKg(kg) : '');
+  const w = plan && plan.weight!=null ? loadLabel(plan.weight) : '';
+  const targets = plan ? spotterTargetText(plan.targets) : '';
+  const rangeText = spotterRangeText(range[0], range[1]);
+  const nextw = live && live.nextWeight!=null ? loadLabel(live.nextWeight) : w;
+  const target = live && live.nextTarget ? spotterRangeText(live.nextTarget[0], live.nextTarget[1]) : targets;
+  const lastbit = live && live.lastTime!=null ? ' (last time: '+live.lastTime+')' : '';
+  const bwAdd = 'Add '+spotterKg(jump)+' or a harder variation.';
+  const lightline = (extra.bodyweight && live && !(live.nextWeight>0)) ? bwAdd : ('Try '+(nextw||spotterKg(jump))+' next set.');
+  const heavyline = 'Drop to '+(nextw||w)+', keep reps in range.';
+  let comeback = w ? ('Stay at '+w+' x '+targets+'.') : ('Aim '+targets+'.');
+  if(plan && plan.message==='PLAN_COMEBACK' && !plan.gentle)
+    comeback = plan.weight>0 ? (spotterKg(plan.weight)+' x '+targets+'. About 10% off.') : ('Rebuild the reps. Aim '+targets+'.');
+  let bumpline = 'Next session: '+(w||spotterKg(jump))+' x '+(range[0]||8)+'.';
+  if(live && live.wrap){
+    bumpline = live.wrap.bodyweightBump
+      ? ('Next session: '+bwAdd)
+      : ('Next session: '+spotterKg(live.wrap.nextWeight)+' x '+live.wrap.nextReps+'.');
+  } else if(plan && plan.bodyweightBump) bumpline = bwAdd;
+  let wrapline = 'Same total as last time.';
+  if(live && live.wrap){
+    const d = live.wrap.repsDelta;
+    if(live.wrap.earnedBump) wrapline = bumpline;
+    else if(live.wrap.cmp==='progress'){
+      const up = live.wrap.weightDelta>0 ? ('Up '+spotterKg(live.wrap.weightDelta)+'. ') : '';
+      wrapline = up + (d>0 ? ('+'+d+' reps vs last time.') : 'Ahead of last time.');
+    } else if(live.wrap.cmp==='light') wrapline = d!=null && d<0 ? (Math.abs(d)+' reps under last time.') : 'Lighter than last time.';
+  }
+  const logged = extra.loggedWeight;
+  return Object.assign({
+    w, targets, range: rangeText, nextw, target, lastbit, lightline, heavyline, comeback, bumpline, wrapline,
+    pr: extra.prText || '',
+    shortw: (extra.bodyweight && !(Number(logged)>0)) ? 'bodyweight' : (logged!=null && isFinite(logged) ? spotterNum(logged) : (plan && plan.weight!=null ? spotterNum(plan.weight) : '')),
+    fallback: w ? (w+' x '+targets) : ('Find a weight for '+rangeText+' reps.')
+  }, extra.tokens||{});
+}
+function spotterPlanMessage(plan, ctx, scope){
+  let type = plan.message || 'PLAN_HOLD';
+  if(plan.bodyweightBump && type==='PLAN_BUMP') ctx = Object.assign({}, ctx, {fallback: ctx.bumpline});
+  const msg = spotterPresent(type, ctx, scope);
+  if(plan.bodyweightBump && (type==='PLAN_BUMP' || type==='BUMP_UNLOCKED')){
+    msg.numbers = spotterClip(ctx.bumpline || msg.numbers, 64);
+  }
+  return msg;
+}
+function spotterJoinReps(sets){
+  const reps = (sets||[]).map(s => s && s.reps).filter(n => n>0);
+  if(reps.length<=1) return reps.length ? String(reps[0]) : '';
+  if(reps.length===2) return reps[0]+' and '+reps[1];
+  return reps.slice(0, -1).join(', ')+' and '+reps[reps.length-1];
+}
+function spotterLoadPhrase(kg, metric, bw){
+  if(bw && !(Number(kg)>0)) return 'bodyweight';
+  if(metric==='weighted_bw') return Number(kg)>0 ? ('bodyweight + '+spotterKg(kg)) : 'bodyweight';
+  if(kg==null || !isFinite(Number(kg))) return '';
+  return spotterKg(kg);
+}
+/* Plain explanation for the exercise card. The short catalog stays for the self-test. */
+function spotterTalk(plan, live, opts){
+  opts = opts || {};
+  plan = plan || {};
+  const range = opts.range || [8, 12];
+  const rangeText = spotterRangeText(range[0], range[1]);
+  const metric = opts.metric || 'weight_reps';
+  const bw = !!opts.bodyweight;
+  const say = kg => spotterLoadPhrase(kg, metric, bw);
+  const last = opts.last;
+  const lastReps = last ? spotterJoinReps(last.sets) : '';
+  const lastLoad = last ? say(last.W) : '';
+  const targets = plan.targets ? spotterTargetText(plan.targets) : rangeText;
+  const done = opts.done||0;
+  const planned = Math.max(1, opts.planned||1);
+  const left = Math.max(0, planned - done);
+  const setLine = left<=0
+    ? 'That was the last planned set.'
+    : (left===1 ? 'One working set left.' : (left+' working sets left.'));
+  if(live && !live.silent){
+    const nextLoad = say(live.nextWeight);
+    const nextReps = live.nextTarget ? spotterRangeText(live.nextTarget[0], live.nextTarget[1]) : '';
+    const did = say(opts.loggedWeight);
+    const reps = opts.loggedReps;
+    const feel = live.feel==='easy' ? 'Easy' : live.feel==='hard' ? 'Hard' : 'Medium';
+    const nextBit = nextLoad+(nextReps ? (' × '+nextReps) : '');
+    if(live.type==='BUMP_UNLOCKED'){
+      const bump = live.wrap && live.wrap.bodyweightBump;
+      return {
+        lead: 'You earned more weight.',
+        why: bump
+          ? ('Every working set hit '+range[1]+'. Next time, add '+spotterKg(opts.jump||plan.jump)+' or pick a harder variation. '+setLine)
+          : ('Every working set at '+did+' hit '+range[1]+'. Next session starts at '+say(live.wrap && live.wrap.nextWeight)+' × '+(live.wrap && live.wrap.nextReps)+'. '+setLine)
+      };
+    }
+    if(live.type==='SET_TOO_LIGHT'){
+      return {
+        lead: 'That was too easy for this range.',
+        why: reps+' easy reps is past '+rangeText+'. The next set moves up to '+nextLoad+'. Whatever you log from here is the weight for the rest of this exercise.'
+      };
+    }
+    if(live.type==='SET_TOO_HEAVY'){
+      return {
+        lead: 'That was too heavy.',
+        why: reps+' hard reps is under '+range[0]+'. The next set comes down to '+nextLoad+', still aiming for '+rangeText+'.'
+      };
+    }
+    if(live.type==='SET_BELOW_TARGET'){
+      const wanted = live.target ? spotterRangeText(live.target[0], live.target[1]) : rangeText;
+      return {
+        lead: 'Short of this set’s target.',
+        why: 'The target was '+wanted+' and you got '+reps+'. Stay at '+nextLoad+' and aim for '+nextReps+'. '+setLine
+      };
+    }
+    if(live.type==='SET_BEAT_TARGET'){
+      return {
+        lead: 'Ahead of this set’s target.',
+        why: 'You did '+reps+', past the target. Stay at '+nextLoad+' and aim for '+nextReps+' next. The weight goes up only when every set hits '+range[1]+'.'
+      };
+    }
+    if(live.type==='SET_GRIND'){
+      return {
+        lead: 'Hard set. Match it, don’t add reps.',
+        why: 'Stay at '+nextLoad+' and aim for '+nextReps+'. '+setLine
+      };
+    }
+    if(String(live.type||'').indexOf('PR_')===0){
+      return {
+        lead: 'New record'+(opts.prText ? ('. '+opts.prText+'.') : '.'),
+        why: 'Next set stays at '+nextBit+'. '+setLine
+      };
+    }
+    if(live.type==='WRAP_EX_PROGRESS'){
+      const extra = live.wrap && live.wrap.repsDelta>0 ? (live.wrap.repsDelta+' more reps than last session. ') : 'Better than last time. ';
+      return {lead: 'Ahead of last time.', why: extra+'The weight stays here until next session. '+setLine};
+    }
+    if(live.type==='WRAP_EX_LIGHT'){
+      return {lead: 'Lighter than last time. It still counts.', why: 'Next session, stay with '+nextLoad+' and build the reps back. '+setLine};
+    }
+    if(live.type==='WRAP_EX_SAME'){
+      return {lead: 'Same place as last time.', why: 'No extra reps yet, so the weight stays. '+setLine};
+    }
+    return {
+      lead: 'On target.',
+      why: 'That was '+reps+' at '+did+', and it felt '+feel+'. Next set: '+nextBit+'. '+setLine+' The weight stays until every set hits '+range[1]+'.'
+    };
+  }
+  const today = say(plan.weight);
+  if(plan.kind==='NEW_LIFT' || plan.weight==null){
+    return {
+      lead: 'First time on this exercise.',
+      why: 'The range is '+rangeText+' reps. Pick a weight you could do again, around Medium. Log it, and the next session will have a real target.'
+    };
+  }
+  if(plan.kind==='BUMP' && plan.bodyweightBump){
+    return {
+      lead: 'Time to add a little load.',
+      why: 'Last time every set hit '+range[1]+' at bodyweight'+(lastReps ? (' ('+lastReps+')') : '')+'. Add '+spotterKg(plan.jump)+', or pick a harder variation. Today’s reps start at '+targets+'.'
+    };
+  }
+  if(plan.kind==='BUMP'){
+    return {
+      lead: 'Add weight today.',
+      why: 'Last time at '+lastLoad+' you hit the top of '+rangeText+(lastReps ? (' ('+lastReps+')') : '')+'. Today is '+today+', starting around '+targets+'.'
+    };
+  }
+  if(plan.kind==='ADD_REPS'){
+    return {
+      lead: 'Same weight. Add a rep or two.',
+      why: 'Last time was '+lastLoad+(lastReps ? (' for '+lastReps) : '')+'. Stay at '+today+' and aim for '+targets+'. The weight goes up once every set reaches '+range[1]+'.'
+    };
+  }
+  if(plan.kind==='HOLD'){
+    return {
+      lead: 'Same weight. Get back into the range.',
+      why: 'Last time at '+lastLoad+' finished under '+range[0]+(lastReps ? (' ('+lastReps+')') : '')+'. Stay at '+today+' and aim for '+targets+'. One off session is not a reason to drop the weight.'
+    };
+  }
+  if(plan.kind==='DELOAD'){
+    return {
+      lead: 'A small step down.',
+      why: 'Two sessions at '+lastLoad+' finished under '+range[0]+'. Today is '+today+', aiming for '+targets+'.'
+    };
+  }
+  if(plan.kind==='RESET'){
+    return {
+      lead: 'Reset about 10%.',
+      why: 'Four sessions at '+lastLoad+' did not add a rep. Today is '+today+', aiming for '+targets+'.'
+    };
+  }
+  if(plan.kind==='PLATEAU'){
+    return {
+      lead: 'The reps have stalled.',
+      why: 'Three sessions at '+lastLoad+' with no extra reps. Stay at '+today+' and keep chasing '+targets+'. One more flat session and the weight comes down about 10%.'
+    };
+  }
+  if(plan.kind==='COMEBACK' && plan.gentle){
+    return {
+      lead: 'Welcome back. Same weight.',
+      why: (plan.gapDays ? ('It has been '+plan.gapDays+' days. ') : '')+'Stay at '+today+' and work '+targets+'. A weight increase waits until you are back in the groove.'
+    };
+  }
+  if(plan.kind==='COMEBACK'){
+    return {
+      lead: 'Ease back in.',
+      why: (plan.gapDays ? ('It has been '+plan.gapDays+' days, so ') : '')+'today starts about 10% lighter, at '+today+', aiming for '+targets+'.'
+    };
+  }
+  return {
+    lead: today ? ('Today: '+today+'.') : 'Today’s target.',
+    why: 'Aim for '+targets+' across '+planned+' sets. The range is '+rangeText+'.'
+  };
+}
+/* Planned sets are in. No next-set line until the user asks for a bonus set. */
+function spotterNextTimeLine(msg){
+  const wrap = msg && msg.wrap;
+  const say = kg => spotterLoadPhrase(kg, msg.metric, !!msg.bodyweight);
+  if(wrap && wrap.earnedBump && wrap.bodyweightBump)
+    return 'Next time, add '+spotterKg(msg.jump)+' or pick a harder variation.';
+  if(wrap && wrap.earnedBump && wrap.nextWeight!=null)
+    return 'Next time starts at '+say(wrap.nextWeight)+' × '+(wrap.nextReps!=null ? wrap.nextReps : '')+'.';
+  if(wrap && wrap.cmp==='light')
+    return 'Next time, stay at '+say(wrap.nextWeight)+' and build the reps back.';
+  if(wrap && msg.bodyweight && !(Number(wrap.nextWeight)>0))
+    return 'Next time, bodyweight again.';
+  if(wrap && wrap.nextWeight!=null && !(msg.bodyweight && !(Number(wrap.nextWeight)>0)))
+    return 'Next time, same weight, '+say(wrap.nextWeight)+'.';
+  return 'Next time, the same work as today.';
+}
+function spotterClosedTalk(msg){
+  msg = msg || {};
+  const next = spotterNextTimeLine(msg);
+  const coach = 'I will coach you against today.';
+  const pr = msg.prChip || String(msg.type||'').indexOf('PR_')===0;
+  if(pr) return {lead:'New record.', why:(msg.prText ? msg.prText+'. ' : '')+next+' '+coach};
+  if(msg.wrap && msg.wrap.earnedBump && msg.wrap.bodyweightBump)
+    return {lead:'Time to add a little load.', why:next+' '+coach};
+  if(msg.wrap && msg.wrap.earnedBump)
+    return {lead:'You earned more weight.', why:next+' '+coach};
+  if(msg.wrap && msg.wrap.cmp==='progress')
+    return {lead:'Ahead of last time.', why:next+' '+coach};
+  if(msg.wrap && msg.wrap.cmp==='light')
+    return {lead:'Lighter than last time.', why:'It still counts. '+next+' '+coach};
+  return {lead:'Today is done.', why:next+' '+coach};
+}
+function spotterBonusTalk(msg){
+  const detail = (typeof spotterUseDetail==='function') ? spotterUseDetail(msg) : '';
+  return {
+    lead: 'Bonus set.',
+    why: detail
+      ? ('Aim for '+detail+'. Logging it does not change next time.')
+      : 'Log the extra work if you want it. It does not change next time.'
+  };
+}
+function spotterCardView(planRow, log, doneSets){
+  const ex = getExercise(planRow.exerciseId);
+  if(!ex || !spotterUsesEngine(ex)) return null;
+  const bw = spotterBwMode(ex);
+  const range = spotterRepRange(planRow, ex);
+  const jump = spotterJumpFor(ex, planRow);
+  const planned = Math.max(1, planRow.sets||1);
+  const hist = spotterPast(planRow.exerciseId, log);
+  const plan = spotterStartPlan(hist, planned, range, jump, (log && log.date) || todayKey(), {bodyweight: bw});
+  const working = spotterWorkingFromRaw(doneSets||[], {repsOnly: ex.metric==='reps_only'});
+  const lastRaw = [...(doneSets||[])].reverse().find(s => s && !s.isWarmup) || null;
+  let live = null;
+  if(working.length){
+    const just = working[working.length-1];
+    const prior = lastRaw ? spotterPriorRaw(planRow.exerciseId, lastRaw) : [];
+    const prKind = lastRaw && lastRaw.isPR ? (spotterPrKind(lastRaw, prior, range[0]) || 'PR_E1RM') : null;
+    live = spotterLive(plan, working, {
+      weight: just.weight, reps: just.reps, feel: just.feel,
+      isPR: !!(lastRaw && lastRaw.isPR && !lastRaw.isDropSet),
+      isDropSet: !!(lastRaw && lastRaw.isDropSet)
+    }, hist[0]||null, range, {plannedSets: planned, jump, bodyweight: bw, prior, prKind});
+  }
+  const prText = lastRaw ? setValueText(lastRaw, ex.metric, ex) : '';
+  const ctx = spotterMessageCtx(plan, live, {range, bodyweight: bw, loggedWeight: working.length ? working[working.length-1].weight : plan.weight, prText});
+  const scopeBase = {logId: log && log.id, exerciseId: planRow.exerciseId};
+  let msg;
+  if(live && !live.silent){
+    const sig = [live.type, working.length, working[working.length-1].reps, working[working.length-1].weight, lastRaw && lastRaw.id].join(':');
+    msg = spotterPresent(live.type, ctx, Object.assign({key: 's2:'+(log&&log.id)+':'+planRow.exerciseId+':'+sig}, scopeBase));
+    if((live.type==='BUMP_UNLOCKED' || live.type==='SET_TOO_LIGHT') && (plan.bodyweightBump || (bw && !(live.nextWeight>0) && live.type==='BUMP_UNLOCKED')))
+      msg.numbers = spotterClip(ctx.bumpline, 64);
+  } else {
+    const sig = [plan.message, plan.weight, spotterTargetText(plan.targets)].join(':');
+    msg = spotterPlanMessage(plan, ctx, Object.assign({key: 's2:'+(log&&log.id)+':'+planRow.exerciseId+':plan:'+sig}, scopeBase));
+  }
+  const showingLive = !!(live && !live.silent);
+  const nextTarget = showingLive && live.nextTarget ? live.nextTarget : (plan.targets && plan.targets[Math.min(working.length, Math.max(0, (plan.targets||[]).length-1))]);
+  let fillWeight = showingLive ? live.nextWeight : plan.weight;
+  let fillReps = nextTarget ? nextTarget[1] : null;
+  if(plan.kind==='NEW_LIFT' && !showingLive) fillWeight = null;
+  if((plan.bodyweightBump && !showingLive) || (showingLive && live.wrap && live.wrap.bodyweightBump)) fillWeight = jump;
+  if(showingLive && live.type==='SET_TOO_LIGHT' && bw && !(live.nextWeight>0)) fillWeight = jump;
+  msg.fillWeight = fillWeight!=null && isFinite(Number(fillWeight)) ? Number(fillWeight) : null;
+  msg.fillReps = fillReps!=null && isFinite(Number(fillReps)) ? Number(fillReps) : null;
+  msg.metric = ex.metric;
+  msg.bodyweight = bw;
+  msg.talk = spotterTalk(plan, live, {
+    range, metric: ex.metric, bodyweight: bw, last: hist[0]||null,
+    planned, done: working.length, jump,
+    loggedWeight: working.length ? working[working.length-1].weight : plan.weight,
+    loggedReps: working.length ? working[working.length-1].reps : null,
+    prText
+  });
+  msg.sessionDone = working.length >= planned;
+  msg.wrap = live && live.wrap ? live.wrap : null;
+  msg.jump = jump;
+  msg.prText = prText;
+  msg.glow = msg.level===3;
+  msg.confetti = msg.level===3 && String(msg.type||'').indexOf('PR_')===0;
+  msg.planKind = plan.kind;
+  return msg;
+}
+function spotterNameBit(){
+  const n = (DATA && DATA.settings && DATA.settings.userName || '').trim();
+  if(!n || n.toLowerCase()==='user') return '';
+  return ', '+n;
+}
+function spotterCountWord(n){
+  const words = ['zero','one','two','three','four','five','six','seven','eight','nine','ten'];
+  n = Math.round(Number(n)||0);
+  return n>=0 && n<words.length ? words[n] : String(n);
+}
+function spotterWeekStats(){
+  const now = new Date(); now.setHours(0,0,0,0);
+  const sinceMon = (now.getDay()+6) % 7;
+  const start = new Date(now); start.setDate(now.getDate()-sinceMon);
+  const end = new Date(start); end.setDate(start.getDate()+7);
+  const startKey = dateKey(start), endKey = dateKey(end), today = dateKey(now);
+  const days = splitDays();
+  let m = 0, n = 0;
+  DAY_ORDER.forEach(dk=>{
+    const day = days[dk];
+    if(!day || !(day.exercises||[]).length) return;
+    m++;
+    const hit = (DATA.logs||[]).some(l => l && l.date>=startKey && l.date<endKey && l.dayKey===dk && (l.sets||[]).length);
+    if(hit) n++;
+  });
+  if(!m){
+    const from = new Date(now); from.setDate(now.getDate()-6);
+    const fromKey = dateKey(from);
+    const dates = new Set();
+    (DATA.logs||[]).forEach(l=>{ if(l && l.date>=fromKey && l.date<=today && (l.sets||[]).length) dates.add(l.date); });
+    return {n: dates.size, m: 0, chip: dates.size+' this week'};
+  }
+  return {n, m, chip: n+' of '+m+' this week'};
+}
+function spotterDaysSinceWorkout(today){
+  let best = null;
+  (DATA.logs||[]).forEach(l=>{
+    if(!l || !l.date || l.date>=today || !(l.sets||[]).length) return;
+    if(!best || l.date>best) best = l.date;
+  });
+  return best ? spotterGapDays(best, today) : null;
+}
+function spotterOneOff(exerciseId, hist){
+  const last = hist && hist[0];
+  if(!last) return null;
+  let best = 0, any = false;
+  hist.forEach(s=>{
+    if(!spotterSameWeight(s.W, last.W)) return;
+    (s.sets||[]).forEach(set=>{ if(set.reps>best){ best = set.reps; any = true; } });
+  });
+  if(!any) return null;
+  const lastBest = (last.sets||[]).reduce((m,s)=> Math.max(m, s.reps), 0);
+  return best-lastBest===1 ? {weight: last.W} : null;
+}
+function spotterWatchLine(rows){
+  const bumps = [], near = [], adds = [];
+  const todayLogId = (typeof todayLog==='function' && todayLog().id) || null;
+  (rows||[]).forEach(row=>{
+    const ex = getExercise(row.exerciseId);
+    if(!ex || !spotterUsesEngine(ex)) return;
+    const hist = spotterHistory(row.exerciseId).filter(s => s.id!==todayLogId && s.date<todayKey());
+    const plan = spotterStartPlan(hist, Math.max(1, row.sets||1), spotterRepRange(row, ex), spotterJumpFor(ex, row), todayKey(), {bodyweight: spotterBwMode(ex)});
+    const short = String(ex.name||'').split(' ')[0] || 'Lift';
+    if(plan.kind==='BUMP'){
+      bumps.push(plan.bodyweightBump ? (short+' can take a harder variation') : (short+' is one clean session from '+spotterNum(plan.weight)));
+    } else {
+      const off = spotterOneOff(row.exerciseId, hist);
+      if(off) near.push(short+' is 1 rep off '+spotterNum(off.weight));
+      else if(plan.kind==='ADD_REPS') adds.push(short+', one more rep');
+    }
+  });
+  const items = bumps.concat(near, adds).slice(0, 2);
+  if(!items.length) return 'Keep the sets honest.';
+  let line = items.join('. ');
+  if(!/[.!?]$/.test(line)) line += '.';
+  return spotterClip(line, 64);
+}
+function spotterGreeting(log, planRows){
+  const today = todayKey();
+  const anyLog = (DATA.logs||[]).some(l => l && (l.sets||[]).length);
+  const trainedToday = (DATA.logs||[]).some(l => l && l.date===today && (l.sets||[]).length);
+  const session = (log && planNameForLog(log)) || 'Workout';
+  const count = (planRows||[]).length;
+  const week = spotterWeekStats();
+  const gap = spotterDaysSinceWorkout(today);
+  const hour = new Date().getHours();
+  let type = 'GREET_MORNING';
+  if(!anyLog) type = 'GREET_FIRST_EVER';
+  else if(week.m>0 && week.n>=week.m && trainedToday) type = 'GREET_WEEK_COMPLETE';
+  else if(trainedToday) type = 'GREET_ALREADY_DONE';
+  else if(!count) type = 'GREET_REST_DAY';
+  else if(gap!=null && gap>=14) type = 'GREET_BACK_LONG';
+  else if(gap!=null && gap>=4 && gap<=7) type = 'GREET_BACK_SHORT';
+  else if(hour>=5 && hour<=11) type = 'GREET_MORNING';
+  else if(hour>=12 && hour<=16) type = 'GREET_AFTERNOON';
+  else if(hour>=17 && hour<=21) type = 'GREET_EVENING';
+  else type = 'GREET_LATE';
+  const tokens = {
+    name: spotterNameBit(),
+    session, count: spotterCountWord(count),
+    watch: type==='GREET_FIRST_EVER' ? '' : spotterWatchLine(planRows),
+    n: String(week.n), m: String(week.m)
+  };
+  const msg = spotterPresent(type, tokens, {key: 'greet:'+today+':'+type+':'+tokens.watch, logId: log && log.id, exerciseId: 'home'});
+  return {line1: msg.headline || spotterClip(spotterFill(SPOTTER_COPY[type][0].h, tokens), 36), line2: msg.numbers, chip: week.chip, level: msg.level, type};
+}
+function spotterWorkoutSummary(log){
+  if(!log) return null;
+  const seen = [];
+  const have = new Set();
+  (log.sets||[]).forEach(s=>{
+    if(!s || s.isWarmup || have.has(s.exerciseId)) return;
+    const ex = getExercise(s.exerciseId);
+    if(!ex || !spotterUsesEngine(ex)) return;
+    have.add(s.exerciseId);
+    seen.push({ex, row: (planForLog(log)||[]).find(r => r.exerciseId===s.exerciseId) || {exerciseId:s.exerciseId, sets:3, repsMin:8, repsMax:12}});
+  });
+  let progressed = 0;
+  const nextBits = [];
+  seen.forEach(({ex, row})=>{
+    const hist = spotterHistory(ex.id);
+    const todayS = hist.find(s => s.id===log.id);
+    const prev = hist.find(s => s.id!==log.id);
+    if(todayS && prev && (todayS.W>prev.W+0.001 || (spotterSameWeight(todayS.W, prev.W) && todayS.total>prev.total))) progressed++;
+    const past = hist.filter(s => s.id!==log.id);
+    const plan = spotterStartPlan(past, Math.max(1, row.sets||1), spotterRepRange(row, ex), spotterJumpFor(ex, row), log.date, {bodyweight: spotterBwMode(ex)});
+    const rank = {BUMP:3, ADD_REPS:2, PLATEAU:2, HOLD:1, COMEBACK:1, DELOAD:0, RESET:0, NEW_LIFT:0};
+    const short = String(ex.name||'Lift').split(' ')[0];
+    const label = plan.bodyweightBump ? (short+': add '+spotterKg(plan.jump))
+      : plan.weight!=null ? (short+' '+spotterNum(plan.weight)+' x '+spotterTargetText(plan.targets))
+      : (short+' '+spotterRangeText.apply(null, spotterRepRange(row, ex)));
+    nextBits.push({rank: rank[plan.kind]||0, label});
+  });
+  nextBits.sort((a,b)=> b.rank-a.rank);
+  const top = nextBits.slice(0,2).map(x => x.label);
+  const prs = (log.sets||[]).filter(s => s.isPR).length;
+  let volumeLine = '';
+  const name = planNameForLog(log);
+  const prevLog = (DATA.logs||[]).filter(l => l && l.id!==log.id && (l.sets||[]).length && planNameForLog(l)===name && l.date<=log.date)
+    .sort((a,b)=> a.date===b.date ? ((b.startedAt||0)-(a.startedAt||0)) : (a.date<b.date?1:-1))[0];
+  if(prevLog && typeof setVolumeLoad==='function'){
+    const a = (log.sets||[]).reduce((sum,set)=> sum+setVolumeLoad(set), 0);
+    const b = (prevLog.sets||[]).reduce((sum,set)=> sum+setVolumeLoad(set), 0);
+    if(b>0){
+      const pct = Math.round((a-b)/b*100);
+      volumeLine = pct>=0 ? ('Volume +'+pct+'%') : 'Lighter day, still counts';
+    }
+  }
+  const y = seen.length;
+  const bits = [];
+  if(y) bits.push(progressed+' of '+y+' moved up');
+  if(prs) bits.push(prs+' PR'+(prs>1?'s':''));
+  if(volumeLine) bits.push(volumeLine);
+  const detail = [bits.join('. '), top.length ? ('Next: '+top.join('. ')) : ''].filter(Boolean).join('. ');
+  let type = 'WRAP_STEADY';
+  if(prs>0 || (y>0 && progressed*2>=y)) type = 'WRAP_STRONG';
+  else if(volumeLine==='Lighter day, still counts' || (y>0 && progressed===0)) type = 'WRAP_LIGHT';
+  const msg = spotterPresent(type, {summary: spotterClip(detail, 64), fallback: detail}, {key:'wrap:'+log.id, logId:log.id, exerciseId:'workout'});
+  msg.detail = detail;
+  return msg;
+}
+function spotterHapticFor(set){
+  if(!set || set.isWarmup) return 'tap';
+  try{
+    const ex = getExercise(set.exerciseId);
+    if(ex && spotterUsesEngine(ex)){
+      const log = (DATA.logs||[]).find(l => l && (l.sets||[]).indexOf(set)>=0);
+      if(log){
+        const row = (planForLog(log)||[]).find(r => r.exerciseId===set.exerciseId) || {exerciseId:set.exerciseId, sets:3, repsMin:8, repsMax:12};
+        const view = spotterCardView(row, log, (log.sets||[]).filter(s => s.exerciseId===set.exerciseId));
+        if(view && view.level===3 && String(view.type||'').indexOf('PR_')===0) return 'pr';
+        if(view && view.type==='BUMP_UNLOCKED' && view.level===3) return 'bumpUnlocked';
+        if(view && (view.type==='SET_GRIND' || view.type==='SET_TOO_HEAVY')) return 'hardSet';
+      }
+    }
+  }catch(e){}
+  if(set.isPR) return 'pr';
+  if(set.difficulty==='hard') return 'hardSet';
+  return 'setLogged';
+}
+
 /* --- raw set maths --- */
 /* Epley. A single is the max itself; reps are capped at 30 so high-rep sets
    (hypertrophy / endurance) still rank above fewer reps at the same weight. */
@@ -11,6 +1488,11 @@ function estimateOneRepMax(weight, reps){
 }
 /* Metrics whose sets carry a weight field (load, assistance or added load). */
 function hasLoadField(metric){ return metric==='weight_reps' || metric==='assisted' || metric==='weighted_bw'; }
+/* A drop set lowers the weight. Time, reps-only, and assistance have nothing to drop. */
+function canDropWeight(ex){
+  const metric = ex && (ex.metric || 'weight_reps');
+  return metric==='weight_reps' || metric==='weighted_bw';
+}
 /* weighted_bw stores only the added load; scoring and volume add the lifter.
    Uses the latest weigh-in, or a typical adult weight when none is logged. */
 const DEFAULT_BODYWEIGHT_KG = 75;
@@ -50,7 +1532,7 @@ function isLowRepSet(set, metric){
   return hasLoadField(metric) && (set.reps||0) > 0 && set.reps < TRAINING.lowRepWarningBelow;
 }
 function effectiveSetsFor(set, exercise){
-  if(set.isWarmup) return 0;
+  if(set.isWarmup || holdInProgress(set)) return 0;
   const metric = metricOf(exercise);
   const goalKey = goalConfig().key;
   let credit;
@@ -95,6 +1577,7 @@ function sessionEffortSummary(sets){
    The first set ever logged is the baseline, not a PR: only beating it earns
    the trophy. Warm-ups and drop sets never hold one. */
 function recomputePRs(exerciseId){
+  if(typeof spotterForget==='function') spotterForget(exerciseId);
   const ex = getExercise(exerciseId); if(!ex) return;
   const metric = metricOf(ex), higher = betterIsHigher(metric);
   const refs = [];
@@ -106,6 +1589,7 @@ function recomputePRs(exerciseId){
   refs.sort((a,b)=> a.log.date===b.log.date ? ((a.set.ts||0)-(b.set.ts||0)) : a.log.date.localeCompare(b.log.date));
   let best = null;
   refs.forEach(({set})=>{
+    if(holdInProgress(set)){ set.isPR = false; return; }
     const score = setPerformanceScore(set, metric);
     const improved = best===null || (higher ? score>best : score<best);
     set.isPR = improved && best!==null;
@@ -127,7 +1611,7 @@ function prMomentsForExercise(exerciseId){
   const metric = metricOf(ex), higher = betterIsHigher(metric);
   const refs = [];
   DATA.logs.forEach(log=> log.sets.forEach(set=>{
-    if(set.exerciseId===exerciseId && !set.isDropSet && !set.isWarmup) refs.push({date:log.date, set});
+    if(set.exerciseId===exerciseId && !set.isDropSet && !set.isWarmup && !holdInProgress(set)) refs.push({date:log.date, set});
   }));
   refs.sort((a,b)=> a.date===b.date ? ((a.set.ts||0)-(b.set.ts||0)) : a.date.localeCompare(b.date));
   let best = null;
@@ -149,7 +1633,7 @@ function sessionSeriesForExercise(exerciseId){
   const byDate = new Map();
   (DATA.logs||[]).forEach(log=>{
     (log.sets||[]).forEach(set=>{
-      if(set.exerciseId!==exerciseId || set.isDropSet || set.isWarmup) return;
+      if(set.exerciseId!==exerciseId || set.isDropSet || set.isWarmup || holdInProgress(set)) return;
       const prev = byDate.get(log.date);
       if(!prev){ byDate.set(log.date, {date:log.date, set}); return; }
       const a = setPerformanceScore(set, metric), b = setPerformanceScore(prev.set, metric);

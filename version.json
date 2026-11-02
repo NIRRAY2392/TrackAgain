@@ -1,13 +1,14 @@
 {
-    "version":  "1.6.0",
-    "build":  7,
-    "date":  "2026-10-22",
+    "version":  "1.7.0",
+    "build":  8,
+    "date":  "2026-11-02",
     "apk":  "downloads/TrackAgain.apk",
-    "apkSize":  4560799,
+    "apkSize":  4768500,
     "notes":  "downloads/",
     "highlights":  [
-                       "Train a different day",
-                       "The rest and hold timer fills from white into light yellow, and the time sits in the middle of the bar",
-                       "Plank, side plank, and treadmill say Start, then the countdown runs"
+                       "Create a preset, or save this week onto another",
+                       "The week you’re editing is the preset",
+                       "A treadmill you add for today is one walk, not two short holds",
+                       "Edit every exercise"
                    ]
 }
