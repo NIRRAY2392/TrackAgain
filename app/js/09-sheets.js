@@ -989,7 +989,7 @@ function renderSplitScreen(){
           </div>
         </div>`);
       if(!inUse){
-        q('[data-load]',row).onclick = ()=> confirmAction('Use “'+preset.name+'”? The week Home follows changes. History, records, and weight logs stay.', 'Use', ()=>{
+        q('[data-load]',row).onclick = ()=> confirmAction('Use “'+preset.name+'”? The week Home follows changes. History, stats, and weight logs stay.', 'Use', ()=>{
           switchToPreset(preset.id);
           showToast('Using “'+preset.name+'”');
           renderApp();
@@ -1195,7 +1195,7 @@ function openNewPresetSheet(){
           renderApp();
         };
         if(activeWorkoutLog()){
-          confirmAction('Use “'+name+'”? The week Home follows changes. History, records, and weight logs stay.', 'Use', go);
+          confirmAction('Use “'+name+'”? The week Home follows changes. History, stats, and weight logs stay.', 'Use', go);
         } else go();
       };
     }
@@ -2637,83 +2637,188 @@ function openExerciseDetailSheet(exerciseId, opts){
   });
 }
 
-/* ------------------------------ Records ------------------------------ */
-let recordsMuscle = null;
-function renderRecordsScreen(){
-  if(recordsMuscle) return renderRecordsMuscleScreen(recordsMuscle);
-  const wrap = el(`<div></div>`);
-  wrap.appendChild(el(`<h3 style="margin-bottom:14px;">Your records</h3>`));
-  if(!appHasAnyPrs()){
-    wrap.appendChild(el(`<div class="card"><p class="empty">No PRs yet — log a set on Home and your best lifts will land here.</p></div>`));
-    return wrap;
-  }
-  const list = el(`<div></div>`);
-  MUSCLES.forEach(muscle=>{
-    const trained = exercisesWithPrs(muscle);
-    const highlight = trained[0];
-    const moments = highlight ? prMomentsForExercise(highlight.id) : [];
-    const current = moments.length ? moments[moments.length-1] : null;
-    const countText = trained.length
-      ? `${trained.length} exercise${trained.length>1?'s':''} with PRs`
-      : 'No PRs yet';
-    const bestLine = current
-      ? `Best: ${highlight.name} – ${formatPrValue(current.set, metricOf(highlight))}`
-      : '';
-    const row = el(`
-      <div class="day-card">
-        <div class="dayname">${escapeHtml(muscle)}</div>
-        <div class="faint small" style="margin-top:4px;">${escapeHtml(countText)}</div>
-        ${bestLine?`<div class="exline">${escapeHtml(bestLine)}</div>`:''}
-      </div>`);
-    row.style.cursor = 'pointer';
-    row.onclick = ()=>{ recordsMuscle = muscle; renderApp(); };
-    list.appendChild(row);
-  });
-  wrap.appendChild(list);
-  return wrap;
+/* ------------------------------ Stats (was Records) ------------------------------ */
+let recordsMuscle = null;       // display label when a muscle is selected
+let recordsMuscleList = null;   // muscles to union for PR list (slug groups)
+let recordsMuscleSlug = null;   // map slug for .sel / toggle
+function clearStatsMuscle(){
+  recordsMuscle = null;
+  recordsMuscleList = null;
+  recordsMuscleSlug = null;
 }
-function renderRecordsMuscleScreen(muscle){
-  const wrap = el(`<div></div>`);
-  const trained = exercisesWithPrs(muscle);
+function openStatsMuscle(slugOrMuscle){
+  const slug = SLUG_MUSCLES[slugOrMuscle] ? slugOrMuscle : slugForMuscle(slugOrMuscle);
+  if(slug && recordsMuscleSlug === slug){
+    clearStatsMuscle();
+    renderApp();
+    return;
+  }
+  if(slug && SLUG_MUSCLES[slug]){
+    recordsMuscleSlug = slug;
+    recordsMuscleList = musclesForSlug(slug);
+    recordsMuscle = labelForSlug(slug);
+  } else {
+    recordsMuscleSlug = null;
+    recordsMuscle = slugOrMuscle;
+    recordsMuscleList = [slugOrMuscle];
+  }
+  renderApp();
+}
+function openStatsBadgeSheet(){
+  const badges = statsBadges();
+  const current = currentStatsBadge();
+  const nextPr = nextBadgesAfter(PR_HUNTER_BADGES, badges.prCount);
+  const climbEarned = STRENGTH_CLIMB_BADGES.filter(b=> badges.climbCount >= b.need);
+  const climbCurrent = climbEarned.length ? climbEarned[climbEarned.length-1] : null;
+  const nextClimb = nextBadgesAfter(STRENGTH_CLIMB_BADGES, badges.climbCount);
+  openSheet({
+    title: current.name,
+    build:(body)=>{
+      body.appendChild(el(`
+        <div class="stats-badge-sheet">
+          <p class="stats-fact-line">${escapeHtml(current.why)}</p>
+          <p class="section-title">Next PR badges</p>
+          ${nextPr.length
+            ? `<ul class="stats-badge-next">${nextPr.map(b=>
+                `<li><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(b.hint)} <span class="faint">(${badges.prCount}/${b.need})</span></li>`
+              ).join('')}</ul>`
+            : `<p class="faint small">You’ve cleared the PR hunter ladder. Legend.</p>`}
+          <p class="section-title">Strength climb</p>
+          <p class="faint small" style="margin-bottom:8px;">${
+            climbCurrent
+              ? `Current: ${escapeHtml(climbCurrent.name)} · ${badges.climbCount} lift${badges.climbCount===1?'':'s'} climbing`
+              : `No climb badge yet · ${badges.climbCount} lift${badges.climbCount===1?'':'s'} climbing`
+          }</p>
+          ${nextClimb.length
+            ? `<ul class="stats-badge-next">${nextClimb.map(b=>
+                `<li><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(b.hint)} <span class="faint">(${badges.climbCount}/${b.need})</span></li>`
+              ).join('')}</ul>`
+            : `<p class="faint small">Every tracked lift is climbing. Nice.</p>`}
+        </div>`));
+    }
+  });
+}
+function statsOverviewDetailHtml(){
+  const prs = totalPrMomentCount();
+  const volKg = lifetimeVolumeKg();
+  const tonnes = volKg / 1000;
+  const tonnesText = !(volKg>0) ? '0'
+    : tonnes >= 10 ? String(Math.round(tonnes))
+    : (Math.round(tonnes*10)/10).toFixed(1).replace(/\.0$/,'');
+  const streak = currentStreakDays();
+  const climb = strengthClimbCount();
+  const weak = statsWeakestLink();
+  const deload = statsDeloadInfo();
+  const hasHistory = prs>0 || volKg>0 || streak>0;
+  if(!hasHistory){
+    return `<div class="card flat stats-detail">
+      <p class="empty" style="padding:24px 10px;">Log a set on Home — your PRs, streak, and volume land here. Tap a muscle anytime.</p>
+    </div>`;
+  }
+  return `<div class="card flat stats-detail">
+    <p class="section-title" style="margin-top:0;">Overview</p>
+    ${statGridHtml([
+      {value:String(prs), label:prs===1?'PR':'PRs'},
+      {value:tonnesText, label:tonnesText==='1'?'Tonne':'Tonnes'},
+      {value:String(streak), label:streak===1?'Day streak':'Day streak'},
+      {value:String(climb), label:climb===1?'Lift climbing':'Lifts climbing'}
+    ])}
+    <p class="stats-kpi-line">${weak ? escapeHtml(weak.line) : 'Not enough history for a weakest link yet.'}</p>
+    ${weak ? `<button type="button" class="btn secondary" data-weak style="width:100%;margin-top:8px;">See ${escapeHtml(weak.label)}</button>` : ''}
+    <p class="stats-kpi-line faint" style="margin-top:12px;">${escapeHtml(deload.line)}</p>
+  </div>`;
+}
+function statsMuscleDetailHtml(muscle, muscleList){
+  const list = muscleList && muscleList.length ? muscleList : [muscle];
+  const trained = exercisesWithPrsForMuscles(list);
   const summary = trained.length
     ? `${trained.length} exercise${trained.length>1?'s':''} with PRs · tap one for its history`
-    : 'No PRs yet';
-  const head = el(`
-    <div class="rec-head">
-      <button type="button" class="close-x" data-back aria-label="Back to all muscles">${icon('chevronLeft',20)}</button>
-      <div class="rec-head-text">
-        <div class="rec-kicker">Records</div>
-        <h3>${escapeHtml(muscle)}</h3>
-        <div class="rec-sub">${escapeHtml(summary)}</div>
-      </div>
-    </div>`);
-  q('[data-back]',head).onclick = ()=>{ recordsMuscle = null; renderApp(); };
-  wrap.appendChild(head);
-
-  const card = el(`<div class="card flat rec-list"></div>`);
+    : 'No PRs yet for this muscle';
+  let rows = '';
   if(!trained.length){
-    card.appendChild(el(`<p class="empty">No records yet for ${escapeHtml(muscle)}. Start training to see your PRs here.</p>`));
+    rows = `<p class="empty" style="padding:20px 8px;">No records yet for ${escapeHtml(muscle)}. Train it and PRs show up here.</p>`;
   } else {
-    trained.forEach(ex=>{
+    rows = trained.map(ex=>{
       const moments = prMomentsForExercise(ex.id);
       const current = moments[moments.length-1];
       const meta = `${prDayLabel(current.date)} · ${moments.length} PR${moments.length>1?'s':''}`;
-      const row = el(`
-        <div class="ex-list-item rec-row" role="button" tabindex="0">
-          <div class="rec-row-main">
-            <div class="rec-row-name">${escapeHtml(ex.name)}</div>
-            <div class="meta">${escapeHtml(meta)}</div>
-          </div>
-          <span class="chip rec-chip">${escapeHtml(formatPrValue(current.set, metricOf(ex)))}</span>
-          <span class="rec-go" aria-hidden="true">${icon('chevronRight',18)}</span>
-        </div>`);
-      row.onclick = ()=> openRecordsPrSheet(ex.id);
-      row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openRecordsPrSheet(ex.id); } };
-      card.appendChild(row);
-    });
+      return `<div class="ex-list-item rec-row" role="button" tabindex="0" data-pr-ex="${escapeHtml(ex.id)}">
+        <div class="rec-row-main">
+          <div class="rec-row-name">${escapeHtml(ex.name)}</div>
+          <div class="meta">${escapeHtml(meta)}</div>
+        </div>
+        <span class="chip rec-chip">${escapeHtml(formatPrValue(current.set, metricOf(ex)))}</span>
+        <span class="rec-go" aria-hidden="true">${icon('chevronRight',18)}</span>
+      </div>`;
+    }).join('');
   }
-  wrap.appendChild(card);
+  return `<div class="card flat stats-detail">
+    <div class="stats-detail-head">
+      <div>
+        <div class="rec-kicker">Muscle</div>
+        <h3 class="stats-detail-title">${escapeHtml(muscle)}</h3>
+        <div class="rec-sub">${escapeHtml(summary)}</div>
+      </div>
+      <button type="button" class="btn ghost" data-clear-muscle aria-label="Clear muscle">Clear</button>
+    </div>
+    <div class="rec-list stats-detail-list">${rows}</div>
+  </div>`;
+}
+function renderStatsScreen(){
+  const wrap = el(`<div class="stats-screen"></div>`);
+  wrap.appendChild(el(`<h3 class="stats-title">Stats</h3>`));
+
+  const current = currentStatsBadge();
+  const badgeChip = el(`
+    <button type="button" class="stats-badge-chip${current.earned?' earned':''}" data-badge>
+      <span class="stats-badge-chip-kicker">${current.earned?'Badge':'Next badge'}</span>
+      <span class="stats-badge-chip-name">${escapeHtml(current.name)}</span>
+      <span class="stats-badge-chip-meta">${escapeHtml(current.progressLabel)}</span>
+    </button>`);
+  badgeChip.onclick = ()=> openStatsBadgeSheet();
+  wrap.appendChild(badgeChip);
+
+  const todaySlugs = todayPlanSlugs();
+  const mapCard = el(`<div class="card flat stats-map-card">
+    <p class="stats-map-hint faint small">Tap a muscle · spark = today</p>
+    ${bodyMapHtml(null, todaySlugs, recordsMuscleSlug)}
+  </div>`);
+  bindBodyMapClicks(mapCard, slug=> openStatsMuscle(slug));
+  wrap.appendChild(mapCard);
+
+  const detail = el(recordsMuscle
+    ? statsMuscleDetailHtml(recordsMuscle, recordsMuscleList)
+    : statsOverviewDetailHtml());
+  const clearBtn = q('[data-clear-muscle]', detail);
+  if(clearBtn) clearBtn.onclick = ()=>{ clearStatsMuscle(); renderApp(); };
+  const weakBtn = q('[data-weak]', detail);
+  if(weakBtn){
+    const weak = statsWeakestLink();
+    if(weak) weakBtn.onclick = ()=> openStatsMuscle(weak.slug);
+  }
+  qa('[data-pr-ex]', detail).forEach(row=>{
+    const id = row.getAttribute('data-pr-ex');
+    row.onclick = ()=> openRecordsPrSheet(id);
+    row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openRecordsPrSheet(id); } };
+  });
+  wrap.appendChild(detail);
+
+  const volKg = lifetimeVolumeKg();
+  const story = volumeStoryFact(volKg);
+  wrap.appendChild(el(`<div class="card flat stats-fact">
+    <p class="section-title" style="margin-top:0;">Fun Fact</p>
+    <p class="stats-fact-line">${escapeHtml(story.line)}</p>
+  </div>`));
+
   return wrap;
+}
+function renderRecordsScreen(){ return renderStatsScreen(); }
+function renderRecordsMuscleScreen(muscle, muscleList){
+  // Kept for callers; Stats now shows muscle PRs inline.
+  recordsMuscle = muscle;
+  recordsMuscleList = muscleList || [muscle];
+  recordsMuscleSlug = slugForMuscle(muscle) || (SLUG_MUSCLES[muscle] ? muscle : null);
+  return renderStatsScreen();
 }
 let prTreeOpen = {year:null, month:null, week:null};
 function prDayLabel(dateStr){
@@ -4429,8 +4534,8 @@ function renderSettingsScreen(){
 }
 
 const RESET_CATEGORIES = [
-  {key:'history',  label:'Workout history', hint:'All logged sessions and sets. Also clears Records, which are built from this.'},
-  {key:'records',  label:'PR trophies on sets', hint:'Clears 🏆 flags. The Records tab still lists best lifts unless you also clear Workout history.'},
+  {key:'history',  label:'Workout history', hint:'All logged sessions and sets. Also clears Stats PRs, which are built from this.'},
+  {key:'records',  label:'PR trophies on sets', hint:'Clears 🏆 flags. The Stats tab still lists best lifts unless you also clear Workout history.'},
   {key:'split',    label:'Split layout', hint:"Switches the week to a fresh God’s Plan. Other presets stay unless you clear those too."},
   {key:'weight',   label:'Weight logs', hint:'Body-weight entries in History.'},
   {key:'presets',  label:'Saved split presets', hint:'Clears your presets and puts God’s Plan, PPL, and PPL + UL back. The week switches to God’s Plan.'},
@@ -4516,7 +4621,7 @@ function applyDataReset(picked){
   } else if(picked.has('split')){
     restoreGodsPlanPreset();
   }
-  recordsMuscle = null;
+  clearStatsMuscle();
   saveData(DATA);
 }
 

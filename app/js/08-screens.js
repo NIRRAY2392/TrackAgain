@@ -14,14 +14,14 @@ const TABS = [
   {key:'today',     icon:'home',     label:'Home'},
   {key:'split',     icon:'calendar', label:'Split'},
   {key:'history',   icon:'history',  label:'History'},
-  {key:'records',   icon:'trophy',   label:'Records'},
+  {key:'stats',     icon:'trophy',   label:'Stats'},
   {key:'settings',  icon:'settings', label:'Settings'}
 ];
 const SCREENS = {
   today:     ()=> (homeScreen==='workout' && todayLog().active) ? renderActiveWorkout() : renderLanding(),
   split:     ()=> renderSplitScreen(),
   history:   ()=> renderHistoryScreen(),
-  records:   ()=> renderRecordsScreen(),
+  stats:     ()=> renderStatsScreen(),
   settings:  ()=> settingsScreen==='edit' ? renderEditExercisesScreen()
                  : settingsScreen==='wu' ? renderWarmupLibraryScreen()
                  : renderSettingsScreen()

@@ -1,6 +1,6 @@
 /* ========================= §2 DOMAIN DATA ========================= */
 /* Muscles: [name, region]. Adding one here makes it appear in the picker,
-   the library, the Records tab and the alternatives engine automatically. */
+   the library, the Stats tab and the alternatives engine automatically. */
 const MUSCLE_DEFS = [
   ['Chest','Push'],['Shoulders','Push'],['Triceps','Push'],
   ['Lats','Pull'],['Upper Back','Pull'],['Rear Delts','Pull'],['Biceps','Pull'],['Forearms','Pull'],

@@ -2347,3 +2347,357 @@ function sessionDurationMs(log){
   return Math.max(0, log.endedAt - log.startedAt);
 }
 
+/* --- Stats tab: body map, badges, volume story, weakest link, deload --- */
+const MUSCLE_TO_SLUG = {
+  'Chest':'chest', 'Shoulders':'deltoids', 'Rear Delts':'deltoids',
+  'Triceps':'triceps', 'Lats':'upper-back', 'Upper Back':'upper-back',
+  'Biceps':'biceps', 'Forearms':'forearm', 'Quads':'quadriceps',
+  'Hamstrings':'hamstring', 'Glutes':'gluteal', 'Calves':'calves',
+  'Abs':'abs', 'Lower Back':'lower-back'
+};
+const SLUG_LABEL = {
+  chest:'Chest', deltoids:'Shoulders', triceps:'Triceps', 'upper-back':'Upper Back',
+  biceps:'Biceps', forearm:'Forearms', quadriceps:'Quads', hamstring:'Hamstrings',
+  gluteal:'Glutes', calves:'Calves', abs:'Abs', 'lower-back':'Lower Back'
+};
+const SLUG_MUSCLES = {
+  chest:['Chest'], deltoids:['Shoulders','Rear Delts'], triceps:['Triceps'],
+  'upper-back':['Upper Back','Lats'], biceps:['Biceps'], forearm:['Forearms'],
+  quadriceps:['Quads'], hamstring:['Hamstrings'], gluteal:['Glutes'],
+  calves:['Calves'], abs:['Abs'], 'lower-back':['Lower Back']
+};
+const CLICKABLE_SLUGS = Object.keys(SLUG_MUSCLES);
+function musclesForSlug(slug){ return SLUG_MUSCLES[slug] || []; }
+function labelForSlug(slug){ return SLUG_LABEL[slug] || slug; }
+function slugForMuscle(muscle){ return MUSCLE_TO_SLUG[muscle] || null; }
+
+function setsInDateRange(fromKey, toKey){
+  const out = [];
+  (DATA.logs||[]).forEach(log=>{
+    if(log.date < fromKey || log.date > toKey) return;
+    (log.sets||[]).forEach(s=> out.push(s));
+  });
+  return out;
+}
+function daysAgoKey(n){
+  const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-n);
+  return dateKey(d);
+}
+/* Effective sets per map slug over the last 30 days (secondary muscles share). */
+function statsMuscleLoad30d(){
+  const work = muscleWorkForSets(setsInDateRange(daysAgoKey(29), todayKey()));
+  const load = {};
+  work.forEach(row=>{
+    const slug = slugForMuscle(row.muscle);
+    if(!slug) return;
+    load[slug] = (load[slug]||0) + row.effectiveSets;
+  });
+  return load;
+}
+function bodyMapLevels(load){
+  const vals = Object.values(load).filter(v=>v>0);
+  const max = vals.length ? Math.max(...vals) : 0;
+  const levels = {};
+  (typeof BODY_MAP_MUSCLES!=='undefined' ? BODY_MAP_MUSCLES : CLICKABLE_SLUGS).forEach(slug=>{
+    const v = load[slug]||0;
+    levels[slug] = !max || !v ? 0 : Math.min(4, Math.max(1, Math.ceil(v/max*4)));
+  });
+  return levels;
+}
+/* Primary muscles on today's plan → map slugs to outline. */
+function todayPlanSlugs(){
+  const log = typeof todayLog==='function' ? todayLog() : null;
+  if(!log) return new Set();
+  const plan = planForLog(log)||[];
+  const slugs = new Set();
+  plan.forEach(row=>{
+    const ex = getExercise(row.exerciseId); if(!ex) return;
+    const slug = slugForMuscle(primaryOf(ex));
+    if(slug) slugs.add(slug);
+  });
+  return slugs;
+}
+function exercisesWithPrsForMuscles(muscles){
+  const set = new Set(muscles);
+  return DATA.exercises.filter(e=> set.has(primaryOf(e)) && prMomentsForExercise(e.id).length).sort(compareExercises);
+}
+function exerciseHasPositiveGain(ex){
+  const moments = prMomentsForExercise(ex.id);
+  if(moments.length < 2) return false;
+  const metric = metricOf(ex), higher = betterIsHigher(metric);
+  const first = moments[0].score, last = moments[moments.length-1].score;
+  return higher ? last > first : last < first;
+}
+function totalPrMomentCount(){
+  return DATA.exercises.reduce((n,e)=> n + prMomentsForExercise(e.id).length, 0);
+}
+function strengthClimbCount(){
+  return DATA.exercises.filter(exerciseHasPositiveGain).length;
+}
+const PR_HUNTER_BADGES = [
+  {need:1,   name:'First spark',   hint:'Log your first PR'},
+  {need:5,   name:'Hot streak',    hint:'5 PRs'},
+  {need:10,  name:'Ten trophies',  hint:'10 PRs'},
+  {need:25,  name:'Quarter century', hint:'25 PRs'},
+  {need:50,  name:'Half hundred',  hint:'50 PRs'},
+  {need:100, name:'Century club',  hint:'100 PRs'}
+];
+const STRENGTH_CLIMB_BADGES = [
+  {need:1,  name:'On the board',  hint:'1 lift climbing'},
+  {need:3,  name:'Three up',      hint:'3 lifts climbing'},
+  {need:5,  name:'Solid climb',   hint:'5 lifts climbing'},
+  {need:10, name:'Strong climb',  hint:'10 lifts climbing'},
+  {need:20, name:'All-rounder',   hint:'20 lifts climbing'}
+];
+function statsBadges(){
+  const prs = totalPrMomentCount();
+  const climb = strengthClimbCount();
+  const ladder = (defs, count)=> defs.map(b=>({...b, earned: count>=b.need, count}));
+  return {
+    prCount: prs,
+    climbCount: climb,
+    prHunter: ladder(PR_HUNTER_BADGES, prs),
+    strengthClimb: ladder(STRENGTH_CLIMB_BADGES, climb)
+  };
+}
+/* Highest earned PR-hunter badge, or the locked first step. */
+function currentStatsBadge(){
+  const prs = totalPrMomentCount();
+  let earned = null;
+  PR_HUNTER_BADGES.forEach(b=>{ if(prs >= b.need) earned = b; });
+  if(earned){
+    return {
+      ...earned, earned:true, count:prs,
+      why:`You locked this at ${earned.need} personal record${earned.need===1?'':'s'}. You’ve got ${prs} now.`,
+      progressLabel:`${prs} PR${prs===1?'':'s'}`
+    };
+  }
+  const first = PR_HUNTER_BADGES[0];
+  return {
+    ...first, earned:false, count:prs,
+    why:`Log your first personal record to unlock ${first.name}. You’re at ${prs} so far.`,
+    progressLabel:'Tap for progress'
+  };
+}
+function nextBadgesAfter(ladder, count){
+  return ladder.filter(b=> count < b.need);
+}
+function lifetimeVolumeKg(){
+  let total = 0;
+  (DATA.logs||[]).forEach(log=> (log.sets||[]).forEach(s=>{ total += setVolumeLoad(s); }));
+  return total;
+}
+/* Fun comparisons for lifetime tonnage — pick closest ratio, rotate near-ties by day. */
+const VOLUME_FACTS = [
+  {unitKg:0.25, singular:'smartphone', plural:'smartphones'},
+  {unitKg:0.5, singular:'water bottle', plural:'water bottles'},
+  {unitKg:1, singular:'bag of sugar', plural:'bags of sugar'},
+  {unitKg:1.5, singular:'laptop', plural:'laptops'},
+  {unitKg:2, singular:'house cat', plural:'house cats'},
+  {unitKg:2.5, singular:'brick', plural:'bricks'},
+  {unitKg:3, singular:'bowling ball', plural:'bowling balls'},
+  {unitKg:4, singular:'gallon of paint', plural:'gallons of paint'},
+  {unitKg:5, singular:'bag of potatoes', plural:'bags of potatoes'},
+  {unitKg:6, singular:'cinder block', plural:'cinder blocks'},
+  {unitKg:7, singular:'car tire', plural:'car tires'},
+  {unitKg:8, singular:'microwave', plural:'microwaves'},
+  {unitKg:9, singular:'office chair', plural:'office chairs'},
+  {unitKg:10, singular:'medium dog', plural:'medium dogs'},
+  {unitKg:12, singular:'watermelon', plural:'watermelons'},
+  {unitKg:15, singular:'car wheel with tire', plural:'car wheels with tires'},
+  {unitKg:18, singular:'small TV', plural:'small TVs'},
+  {unitKg:20, singular:'large dog', plural:'large dogs'},
+  {unitKg:22, singular:'car battery', plural:'car batteries'},
+  {unitKg:25, singular:'bag of cement', plural:'bags of cement'},
+  {unitKg:30, singular:'mountain bike', plural:'mountain bikes'},
+  {unitKg:35, singular:'keg of beer', plural:'kegs of beer'},
+  {unitKg:40, singular:'washing machine drum', plural:'washing machine drums'},
+  {unitKg:45, singular:'hay bale', plural:'hay bales'},
+  {unitKg:50, singular:'donkey', plural:'donkeys'},
+  {unitKg:55, singular:'anvil', plural:'anvils'},
+  {unitKg:60, singular:'oil drum', plural:'oil drums'},
+  {unitKg:70, singular:'grown adult', plural:'grown adults'},
+  {unitKg:80, singular:'vending machine', plural:'vending machines'},
+  {unitKg:90, singular:'panda', plural:'pandas'},
+  {unitKg:100, singular:'newborn calf', plural:'newborn calves'},
+  {unitKg:110, singular:'upright piano', plural:'upright pianos'},
+  {unitKg:120, singular:'lion', plural:'lions'},
+  {unitKg:136, singular:'sumo wrestler', plural:'sumo wrestlers'},
+  {unitKg:150, singular:'refrigerator', plural:'refrigerators'},
+  {unitKg:180, singular:'motorbike', plural:'motorbikes'},
+  {unitKg:200, singular:'grizzly bear', plural:'grizzly bears'},
+  {unitKg:225, singular:'grand piano', plural:'grand pianos'},
+  {unitKg:250, singular:'baby elephant', plural:'baby elephants'},
+  {unitKg:300, singular:'grand piano with stool', plural:'grand pianos with stools'},
+  {unitKg:350, singular:'racing motorcycle', plural:'racing motorcycles'},
+  {unitKg:400, singular:'polar bear', plural:'polar bears'},
+  {unitKg:450, singular:'horse', plural:'horses'},
+  {unitKg:500, singular:'grand piano crate', plural:'grand piano crates'},
+  {unitKg:600, singular:'smart car', plural:'smart cars'},
+  {unitKg:700, singular:'dairy cow', plural:'dairy cows'},
+  {unitKg:800, singular:'bison', plural:'bison'},
+  {unitKg:900, singular:'small sailboat', plural:'small sailboats'},
+  {unitKg:1000, singular:'metric tonne of iron', plural:'metric tonnes of iron'},
+  {unitKg:1100, singular:'Fiat 500', plural:'Fiat 500s'},
+  {unitKg:1200, singular:'moose', plural:'moose'},
+  {unitKg:1300, singular:'hippo', plural:'hippos'},
+  {unitKg:1400, singular:'compact car', plural:'compact cars'},
+  {unitKg:1500, singular:'car', plural:'cars'},
+  {unitKg:1600, singular:'walrus', plural:'walruses'},
+  {unitKg:1800, singular:'buffalo', plural:'buffalo'},
+  {unitKg:2000, singular:'SUV', plural:'SUVs'},
+  {unitKg:2200, singular:'rhinoceros', plural:'rhinoceroses'},
+  {unitKg:2500, singular:'pickup truck', plural:'pickup trucks'},
+  {unitKg:3000, singular:'giraffe', plural:'giraffes'},
+  {unitKg:3500, singular:'small yacht', plural:'small yachts'},
+  {unitKg:4000, singular:'Asian elephant', plural:'Asian elephants'},
+  {unitKg:4500, singular:'Humvee', plural:'Humvees'},
+  {unitKg:5000, singular:'elephant', plural:'elephants'},
+  {unitKg:5500, singular:'African elephant', plural:'African elephants'},
+  {unitKg:6000, singular:'hummer H1', plural:'Hummer H1s'},
+  {unitKg:7000, singular:'T. rex skull', plural:'T. rex skulls'},
+  {unitKg:8000, singular:'garbage truck', plural:'garbage trucks'},
+  {unitKg:9000, singular:'city bus empty', plural:'empty city buses'},
+  {unitKg:10000, singular:'Tyrannosaurus rex', plural:'Tyrannosaurus rexes'},
+  {unitKg:11000, singular:'sperm whale calf', plural:'sperm whale calves'},
+  {unitKg:12000, singular:'school bus', plural:'school buses'},
+  {unitKg:14000, singular:'fire engine', plural:'fire engines'},
+  {unitKg:15000, singular:'shipping container empty', plural:'empty shipping containers'},
+  {unitKg:16000, singular:'humpback whale', plural:'humpback whales'},
+  {unitKg:18000, singular:'Tyrannosaurus', plural:'Tyrannosauruses'},
+  {unitKg:20000, singular:'loaded city bus', plural:'loaded city buses'},
+  {unitKg:22000, singular:'fighter jet', plural:'fighter jets'},
+  {unitKg:25000, singular:'loaded shipping container', plural:'loaded shipping containers'},
+  {unitKg:30000, singular:'fin whale', plural:'fin whales'},
+  {unitKg:35000, singular:'blue whale tongue', plural:'blue whale tongues'},
+  {unitKg:40000, singular:'semi truck empty', plural:'empty semi trucks'},
+  {unitKg:45000, singular:'railway carriage', plural:'railway carriages'},
+  {unitKg:50000, singular:'blue whale heart+blood', plural:'blue whale hearts with blood'},
+  {unitKg:55000, singular:'M1 Abrams tank', plural:'M1 Abrams tanks'},
+  {unitKg:60000, singular:'loaded semi truck', plural:'loaded semi trucks'},
+  {unitKg:70000, singular:'blue whale', plural:'blue whales'},
+  {unitKg:74000, singular:'space shuttle', plural:'space shuttles'},
+  {unitKg:80000, singular:'space shuttle orbiter', plural:'space shuttle orbiters'},
+  {unitKg:90000, singular:'Boeing 737 empty', plural:'empty Boeing 737s'},
+  {unitKg:100000, singular:'main battle tank convoy', plural:'main battle tank convoys'},
+  {unitKg:120000, singular:'blue whale pair', plural:'pairs of blue whales'},
+  {unitKg:150000, singular:'loaded Boeing 737', plural:'loaded Boeing 737s'},
+  {unitKg:180000, singular:'Statue of Liberty', plural:'Statues of Liberty'},
+  {unitKg:200000, singular:'passenger train car set', plural:'passenger train car sets'},
+  {unitKg:250000, singular:'Boeing 747 empty', plural:'empty Boeing 747s'},
+  {unitKg:300000, singular:'Saturn V first stage fuel', plural:'Saturn V first-stage fuel loads'},
+  {unitKg:350000, singular:'loaded Boeing 747', plural:'loaded Boeing 747s'},
+  {unitKg:400000, singular:'Eiffel Tower iron', plural:'Eiffel Towers of iron'},
+  {unitKg:500000, singular:'naval destroyer section', plural:'naval destroyer sections'},
+  {unitKg:600000, singular:'Space Shuttle stack', plural:'Space Shuttle stacks'},
+  {unitKg:700000, singular:'Sydney Harbour Bridge span', plural:'Sydney Harbour Bridge spans'},
+  {unitKg:800000, singular:'small freighter', plural:'small freighters'},
+  {unitKg:1000000, singular:'Eiffel Tower', plural:'Eiffel Towers'},
+  {unitKg:1200000, singular:'aircraft carrier island', plural:'aircraft carrier islands'},
+  {unitKg:1500000, singular:'freight train', plural:'freight trains'},
+  {unitKg:2000000, singular:'USS Constitution', plural:'ships like USS Constitution'},
+  {unitKg:3000000, singular:'Brooklyn Bridge', plural:'Brooklyn Bridges'},
+  {unitKg:5000000, singular:'CN Tower', plural:'CN Towers'},
+  {unitKg:7000000, singular:'cruise ship mid-size', plural:'mid-size cruise ships'},
+  {unitKg:10000000, singular:'Eiffel Tower ten times', plural:'stacks of ten Eiffel Towers'},
+  {unitKg:15000000, singular:'large cruise ship', plural:'large cruise ships'},
+  {unitKg:20000000, singular:'aircraft carrier', plural:'aircraft carriers'},
+  {unitKg:50000000, singular:'Great Pyramid of Giza', plural:'Great Pyramids of Giza'},
+  {unitKg:100000000, singular:'Empire State Building', plural:'Empire State Buildings'},
+  {unitKg:7.35e22, singular:'the Moon', plural:'Moons'}
+];
+/* Prefer ~1 of something (about 1 motorbike), rotate near matches by day. */
+function volumeStoryFact(kg){
+  if(!(kg>0)) return {tonnes:0, line:'Nothing on the bar yet — every set adds up.'};
+  const tonnes = kg / 1000;
+  const tonnesText = tonnes >= 10 ? String(Math.round(tonnes)) : (Math.round(tonnes*10)/10).toFixed(1).replace(/\.0$/,'');
+  const scored = VOLUME_FACTS.map(f=>{
+    const n = kg / f.unitKg;
+    return {f, n, diff: Math.abs(Math.log(Math.max(n, 1e-12)))};
+  }).sort((a,b)=> a.diff-b.diff);
+  const bestDiff = scored[0].diff;
+  const near = scored.filter(s=> s.diff <= bestDiff + Math.log(1.25));
+  const daySalt = (todayKey().split('-').reduce((a,p)=>a+parseInt(p,10),0)) % near.length;
+  const best = near[daySalt];
+  const count = Math.max(1, Math.round(best.n));
+  const label = count===1 ? best.f.singular : best.f.plural;
+  return {
+    tonnes,
+    line:`You've lifted ${tonnesText} tonne${tonnesText==='1'?'':'s'}, about ${count} ${label}.`
+  };
+}
+function muscleProgressScore(muscles){
+  const trained = exercisesWithPrsForMuscles(muscles);
+  if(!trained.length) return 0;
+  let sum = 0, n = 0;
+  trained.forEach(ex=>{
+    const moments = prMomentsForExercise(ex.id);
+    if(moments.length < 2){ n++; return; }
+    const first = moments[0].score, last = moments[moments.length-1].score;
+    if(!first){ n++; return; }
+    const metric = metricOf(ex);
+    const gain = betterIsHigher(metric) ? (last-first)/Math.abs(first) : (first-last)/Math.abs(first);
+    sum += Math.max(0, gain);
+    n++;
+  });
+  return n ? sum/n : 0;
+}
+function statsWeakestLink(){
+  const load = statsMuscleLoad30d();
+  const trainedPrimaries = new Set();
+  (DATA.logs||[]).forEach(log=> (log.sets||[]).forEach(s=>{
+    const ex = getExercise(s.exerciseId);
+    if(ex) trainedPrimaries.add(primaryOf(ex));
+  }));
+  const candidates = CLICKABLE_SLUGS.map(slug=>{
+    const muscles = musclesForSlug(slug);
+    const sets = load[slug]||0;
+    const progress = muscleProgressScore(muscles);
+    const hasHistory = sets>0 || muscles.some(m=>trainedPrimaries.has(m))
+      || exercisesWithPrsForMuscles(muscles).length>0;
+    return {slug, muscles, label:labelForSlug(slug), sets, progress, hasHistory};
+  }).filter(c=> c.hasHistory);
+  if(!candidates.length) return null;
+  const bySets = [...candidates].sort((a,b)=> a.sets-b.sets);
+  const byProg = [...candidates].sort((a,b)=> a.progress-b.progress);
+  const rank = {};
+  bySets.forEach((c,i)=>{ rank[c.slug] = (rank[c.slug]||0) + i; });
+  byProg.forEach((c,i)=>{ rank[c.slug] = (rank[c.slug]||0) + i; });
+  candidates.sort((a,b)=> (rank[a.slug]-rank[b.slug]) || (a.sets-b.sets) || (a.progress-b.progress));
+  const weak = candidates[0];
+  return {
+    slug: weak.slug,
+    label: weak.label,
+    muscles: weak.muscles,
+    line:`Weakest link: ${weak.label}. Fewest hard sets and the softest climb — train this next.`
+  };
+}
+function statsDeloadInfo(){
+  const weeks = [];
+  for(let w=0; w<52; w++){
+    const vol = weeklyVolumeLoad(w);
+    weeks.push({weeksAgo:w, vol});
+  }
+  // Only consider weeks that had some training in the trailing window
+  const deloadWeeks = [];
+  for(let w=0; w<=47; w++){
+    const prior = [];
+    for(let i=1; i<=4; i++) prior.push(weeks[w+i].vol);
+    if(prior.every(v=>v<=0) && weeks[w].vol<=0) continue;
+    const avg = prior.reduce((a,b)=>a+b,0)/4;
+    if(avg<=0) continue;
+    if(weeks[w].vol <= avg*0.7) deloadWeeks.push(weeks[w]);
+  }
+  if(!deloadWeeks.length){
+    return {count:0, weeksSince:null, line:'No light weeks in the log yet — volume has held steady.'};
+  }
+  const last = deloadWeeks[0]; // most recent (smallest weeksAgo)
+  const since = last.weeksAgo;
+  const sinceText = since===0 ? 'this week' : since===1 ? '1 week ago' : `${since} weeks ago`;
+  return {
+    count: deloadWeeks.length,
+    weeksSince: since,
+    line:`Last light week: ${sinceText}. ${deloadWeeks.length} week${deloadWeeks.length===1?'':'s'} where volume dropped 30%+ vs the prior month.`
+  };
+}
+

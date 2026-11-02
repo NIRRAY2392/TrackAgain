@@ -32,6 +32,35 @@ function icon(name, size){
   size = size || 20;
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]||''}</svg>`;
 }
+/* Front + back muscle map. Today = spark outline; selected = white/black stroke. No volume shading. */
+function bodyMapHtml(_levels, todaySlugs, selectedSlug){
+  const paths = (typeof BODY_MAP_PATHS!=='undefined' && BODY_MAP_PATHS.male) || null;
+  if(!paths) return '<div class="bodymap bm-missing"><p class="faint small">Body map unavailable.</p></div>';
+  const today = todaySlugs instanceof Set ? todaySlugs : new Set(todaySlugs||[]);
+  const inert = typeof BODY_MAP_INERT!=='undefined' ? BODY_MAP_INERT : [];
+  const muscles = typeof BODY_MAP_MUSCLES!=='undefined' ? BODY_MAP_MUSCLES : [];
+  const viewHtml = (view)=>{
+    const sil = inert.map(slug=> (view.p[slug]||[]).map((d,i)=>
+      `<path class="bm-sil" d="${d}"></path>`).join('')).join('');
+    const ms = muscles.map(slug=> (view.p[slug]||[]).map((d,i)=>{
+      const tap = typeof CLICKABLE_SLUGS!=='undefined' && CLICKABLE_SLUGS.includes(slug);
+      const cls = ['bm-m', 'l0', today.has(slug)?'today':'', selectedSlug===slug?'sel':'', tap?'tap':''].filter(Boolean).join(' ');
+      const label = typeof labelForSlug==='function' ? labelForSlug(slug) : slug;
+      return `<path class="${cls}" data-slug="${slug}" d="${d}" ${tap?`role="button" tabindex="0" aria-label="${escapeHtml(label)}" aria-pressed="${selectedSlug===slug?'true':'false'}"`:''}><title>${escapeHtml(label)}</title></path>`;
+    }).join('')).join('');
+    return `<svg class="bm-v" viewBox="${view.vb}" role="group">${sil}${ms}</svg>`;
+  };
+  return `<div class="bodymap tappable">${viewHtml(paths.front)}${viewHtml(paths.back)}</div>`;
+}
+function bindBodyMapClicks(root, onMuscle){
+  qa('.bm-m.tap', root).forEach(path=>{
+    const fire = ()=> onMuscle(path.getAttribute('data-slug'));
+    path.onclick = fire;
+    path.onkeydown = e=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); fire(); }
+    };
+  });
+}
 function logoMarkHtml(){
   return `<svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000000" stroke-width="2.4" stroke-linecap="round"/></svg>`;
 }
@@ -289,9 +318,32 @@ function overlayIsOpen(){
     return n && n.innerHTML.trim();
   });
 }
-/* The page behind an open sheet or dialog must not scroll. */
+/* The page behind an open sheet or dialog must not scroll.
+   Save scrollY and pin body with position:fixed so mobile browsers
+   do not jump to the top when overflow is locked. */
+let overlayScrollY = 0;
 function syncOverlayLock(){
-  document.documentElement.classList.toggle('overlay-open', overlayIsOpen());
+  const html = document.documentElement;
+  const body = document.body;
+  const open = overlayIsOpen();
+  const locked = html.classList.contains('overlay-open');
+  if(open && !locked){
+    overlayScrollY = window.scrollY || window.pageYOffset || 0;
+    html.classList.add('overlay-open');
+    body.style.position = 'fixed';
+    body.style.top = `-${overlayScrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.width = '100%';
+  } else if(!open && locked){
+    html.classList.remove('overlay-open');
+    body.style.position = '';
+    body.style.top = '';
+    body.style.left = '';
+    body.style.right = '';
+    body.style.width = '';
+    window.scrollTo(0, overlayScrollY);
+  }
 }
 (function watchOverlayRoots(){
   const observer = new MutationObserver(syncOverlayLock);
@@ -408,7 +460,7 @@ function openSheet(opts){
    height; pulling down from the top of the content lowers them back to peek,
    and pulling below the resting height closes them. The state is kept on the
    root so a sheet redrawn in place (pickers, editors) doesn't drop back down. */
-const SHEET_PEEK = 0.6, SHEET_MIN_PEEK = 48, SHEET_SNAP_MS = 280;
+const SHEET_PEEK = 0.6, SHEET_MIN_PEEK = 48, SHEET_SNAP_MS = 360;
 function attachSheetDrag(root, node, modal, requestClose, opts, prevState){
   let state = prevState || (opts.startFull ? 'full' : null);
   let H = 0, peek = 0, offset = 0, drag = null, closing = false;
@@ -544,8 +596,10 @@ function attachSheetDrag(root, node, modal, requestClose, opts, prevState){
      && document.activeElement.matches(TYPING)) state = 'full';
   if(prevState){ paint(rest(), false); return; }
   paint(H, false);
+  modal.style.opacity = '0';
   void modal.offsetHeight;
   paint(rest(), true);
+  modal.style.opacity = '';
 }
 function closeSheets(){
   const n = overlayStack;
