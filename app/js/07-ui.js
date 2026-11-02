@@ -319,8 +319,9 @@ function overlayIsOpen(){
   });
 }
 /* The page behind an open sheet or dialog must not scroll.
-   Save scrollY and pin body with position:fixed so mobile browsers
-   do not jump to the top when overflow is locked. */
+   Pin body with position:fixed at -scrollY, then scrollTo(0,0) so the
+   WebView does not keep a leftover scroll offset (that combo left a
+   black gap above the page). */
 let overlayScrollY = 0;
 function syncOverlayLock(){
   const html = document.documentElement;
@@ -329,19 +330,25 @@ function syncOverlayLock(){
   const locked = html.classList.contains('overlay-open');
   if(open && !locked){
     overlayScrollY = window.scrollY || window.pageYOffset || 0;
+    const gapFill = `${Math.max(window.innerHeight, document.documentElement.clientHeight) + overlayScrollY}px`;
     html.classList.add('overlay-open');
+    html.style.backgroundColor = getComputedStyle(body).backgroundColor;
     body.style.position = 'fixed';
     body.style.top = `-${overlayScrollY}px`;
     body.style.left = '0';
     body.style.right = '0';
     body.style.width = '100%';
+    body.style.minHeight = gapFill;
+    window.scrollTo(0, 0);
   } else if(!open && locked){
     html.classList.remove('overlay-open');
+    html.style.backgroundColor = '';
     body.style.position = '';
     body.style.top = '';
     body.style.left = '';
     body.style.right = '';
     body.style.width = '';
+    body.style.minHeight = '';
     window.scrollTo(0, overlayScrollY);
   }
 }
@@ -460,7 +467,7 @@ function openSheet(opts){
    height; pulling down from the top of the content lowers them back to peek,
    and pulling below the resting height closes them. The state is kept on the
    root so a sheet redrawn in place (pickers, editors) doesn't drop back down. */
-const SHEET_PEEK = 0.6, SHEET_MIN_PEEK = 48, SHEET_SNAP_MS = 360;
+const SHEET_PEEK = 0.6, SHEET_MIN_PEEK = 48, SHEET_SNAP_MS = 300;
 function attachSheetDrag(root, node, modal, requestClose, opts, prevState){
   let state = prevState || (opts.startFull ? 'full' : null);
   let H = 0, peek = 0, offset = 0, drag = null, closing = false;
@@ -596,10 +603,8 @@ function attachSheetDrag(root, node, modal, requestClose, opts, prevState){
      && document.activeElement.matches(TYPING)) state = 'full';
   if(prevState){ paint(rest(), false); return; }
   paint(H, false);
-  modal.style.opacity = '0';
   void modal.offsetHeight;
   paint(rest(), true);
-  modal.style.opacity = '';
 }
 function closeSheets(){
   const n = overlayStack;

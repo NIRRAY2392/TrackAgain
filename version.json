@@ -3,11 +3,11 @@
     "build":  8,
     "date":  "2026-11-02",
     "apk":  "downloads/TrackAgain.apk",
-    "apkSize":  4863125,
+    "apkSize":  4885971,
     "notes":  "downloads/",
     "highlights":  [
                        "Stats replaces Records",
-                       "Bottom sheets slide and fade a little softer when they open and close",
+                       "Bottom sheets slide open and closed a bit softer, without a fade on the card",
                        "Opening a History sheet (Days in the gym, a recent workout) no longer jumps the page back to the top on phone",
                        "Create a preset, or save this week onto another"
                    ]

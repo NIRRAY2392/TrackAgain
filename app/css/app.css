@@ -46,7 +46,7 @@ html,body{height:100%;}
 html{background:var(--bg);}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{overscroll-behavior:none;}
-html.overlay-open{overflow:hidden;}
+html.overlay-open{overflow:hidden;height:100%;}
 html.overlay-open body{overflow:hidden;touch-action:none;}
 body{margin:0;background:var(--bg);color:var(--text);min-height:100dvh;-webkit-font-smoothing:antialiased;
   font-size:var(--fs-body);line-height:1.45;padding:0;}
@@ -329,12 +329,12 @@ label{font-size:12px;color:var(--text-dim);font-weight:600;display:block;margin-
 .sheet-grab{width:36px;height:5px;border-radius:999px;background:var(--text-faint);opacity:.5;margin:-10px auto 12px;}
 .modal-bg.sheet-drag{background:transparent;}
 .modal-bg.sheet-drag::before{content:'';position:absolute;inset:0;background:var(--overlay);opacity:var(--sheet-fade,1);}
-.modal-bg.sheet-drag > .modal{position:relative;will-change:transform;opacity:1;transition:opacity .36s cubic-bezier(.22,1,.36,1);}
+.modal-bg.sheet-drag > .modal{position:relative;will-change:transform;}
 .modal-bg.sheet-drag.dragging > .modal{user-select:none;-webkit-user-select:none;}
-.modal-bg.sheet-drag.snapping > .modal{transition:transform .36s cubic-bezier(.22,1,.36,1),opacity .36s cubic-bezier(.22,1,.36,1);}
-.modal-bg.sheet-drag.snapping::before{transition:opacity .36s cubic-bezier(.22,1,.36,1);}
+.modal-bg.sheet-drag.snapping > .modal{transition:transform .3s cubic-bezier(.22,1,.36,1);}
+.modal-bg.sheet-drag.snapping::before{transition:opacity .3s cubic-bezier(.22,1,.36,1);}
 @media (prefers-reduced-motion:reduce){
-  .modal-bg.sheet-drag > .modal,.modal-bg.sheet-drag.snapping > .modal,.modal-bg.sheet-drag.snapping::before{transition:none;}
+  .modal-bg.sheet-drag.snapping > .modal,.modal-bg.sheet-drag.snapping::before{transition:none;}
 }
 .close-x,.back-x{background:var(--bg-sunken);border:1px solid var(--border);border-radius:12px;font-size:18px;color:var(--text-dim);
   padding:0;min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;}

@@ -26,7 +26,7 @@ How this file works
 - **Days in the gym.** On History, under the workout summary, the year of training days is its own card. It opens on last month, this month, and next month, with the month names above the squares and the weekdays down the left. A green square is a gym day, a light square is a day you did not train, and a dark square is a rest day. Today is an open square. Tap a gym day to open that workout.
 - **Edit sets from the workout.** The gear at the top right of an exercise opens that exercise on your split. An exercise that is only in today’s workout opens its own sets and time, and you can add it to the split from there.
 ### Improvements
-- Bottom sheets slide and fade a little softer when they open and close.
+- Bottom sheets slide open and closed a bit softer, without a fade on the card.
 - **The week you’re editing is the preset.** Saving a day, copying a day, or changing sets writes into the preset you’re using, so it stays in step with that preset.
 - **Edit exercises looks like a screen.** Settings, the title, and add sit in one bar. Search and On split / Not on split stay put while you scroll. Both lists use the same region cards and muscle dropdowns. Push, Pull, and Legs sit as quiet labels in each card.
 - **Warm-up library looks like a screen.** Same bar, search, region cards, and muscle dropdowns as Edit exercises.
@@ -43,11 +43,12 @@ How this file works
 - On a split exercise you can set the equipment yourself. Leave it blank to use the library.
 ### Fixes
 - Opening a History sheet (Days in the gym, a recent workout) no longer jumps the page back to the top on phone. Closing it puts you where you were.
+- Opening a sheet no longer leaves a black strip above the page on phone.
 - **A treadmill you add for today is one walk, not two short holds.** It used to come in as 2 sets of 30–60 seconds, and it offered a drop set. Time, reps-only, and assisted exercises no longer offer a drop set. A plank starts at 2 sets of 45–60 seconds. If the exercise is already on your split, the new one copies that day’s sets and time.
 - **Spotter waits out a plank or treadmill countdown.** Starting the timer used to count the set as logged and talk as if you had finished it. Spotter, Today, and the next set wait until you tap Stop or the timer ends.
 - **Warm-ups follow the day you pick.** Something else kept the same four everyday warm-ups after you switched sessions. A day you already edited in Split still uses that list. A day still on the basics now warms up the muscles in that session. A custom session fills warm-ups once you add exercises, until you check one off.
 ### Nerd stuff
-- Male MuscleMap paths (MIT, Melih Colpan) in `js/11-body-paths.js`. No Less/More volume shading. Inline `.stats-detail` with enter animation; `currentStatsBadge` / `openStatsBadgeSheet`; `volumeStoryFact` picks ~1× `unitKg` with day salt. `syncOverlayLock` uses fixed-body scroll restore. `SHEET_SNAP_MS` ~360ms. Tab key `stats`.
+- Male MuscleMap paths (MIT, Melih Colpan) in `js/11-body-paths.js`. No Less/More volume shading. Inline `.stats-detail` with enter animation; `currentStatsBadge` / `openStatsBadgeSheet`; `volumeStoryFact` picks ~1× `unitKg` with day salt. `syncOverlayLock` pins body, scrolls to 0, fills `minHeight`. `SHEET_SNAP_MS` 300ms, transform-only. Tab key `stats`.
 - `DATA.activePresetId` is the preset in use. `linkActivePreset` joins `DATA.splits[activeSplit]` to that preset’s `split` (same object after load). A live week that matches no preset becomes its own preset (`Name (edited)` when the name is taken). Built-in edits set `customized`, and `ensureBuiltinPresets` skips a customized God’s Plan. `touchActivePreset` runs from day save, copy day, plan save, and add-to-split. `storePreset`, `switchToPreset`, and `overwritePresetFromActive` cover create, save-a-copy, and update-another.
 - A finished card gets `is-mini` only after a later exercise has started (`nextExerciseStarted`). The body folds with `grid-template-rows`, and Bonus set clears it through `expandedCards`. Each logged set on that strip is a `.hit-setline`.
 - `spotterStartPlan`, `spotterLive` and `window.spotterSelfTest()` live in `js/05-training.js`. History is cached per exercise and dropped inside `recomputePRs`. Copy variety is `trackagain_spotter_v1`. `spotterJumpFor` is `loadStepFor` (plan row, then exercise, then `TRAINING.load.minIncrementByEquip`). A plan row may set `equipment` (`null` uses the library). Timed and assisted cards still use `progressionFor` and `liveSetFeedback`. Android `VIBRATE` is declared.
