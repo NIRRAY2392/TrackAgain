@@ -98,7 +98,6 @@ function compareExercises(a,b){
   if(pop) return pop;
   return a.name.localeCompare(b.name);
 }
-function exercisesForMuscle(muscle){ return DATA.exercises.filter(e=>primaryOf(e)===muscle).sort(compareExercises); }
 function searchExercises(term, pool){
   const t = (term||'').trim().toLowerCase();
   const list = (pool||DATA.exercises).slice();
@@ -137,7 +136,7 @@ function todayLog(){
   if(log) return log;
   return {id:uid(), date, dayKey:weekdayKey(), sets:[], active:false, completed:false,
     startedAt:null, endedAt:null, elapsedMs:0, timerRunningSince:null, plan:null, planName:'',
-    customSession:false, warmups:null, warmupDone:[], _transient:true};
+    customSession:false, sessionId:null, warmups:null, warmupDone:[], _transient:true};
 }
 function persistLog(log){
   if(!log || !log._transient) return log;
@@ -359,14 +358,25 @@ function syncActiveWorkoutFromSplit(opts){
   return true;
 }
 /* Today's session only. The split is not edited.
-   kind: 'scheduled' (this weekday), 'day' (another split day), 'custom' (empty). */
+   kind: 'scheduled' (this weekday), 'day' (another split day),
+   'custom' (empty), 'session' (saved session id in dayKey). */
 function applyTodaySession(kind, dayKey){
   const log = persistLog(todayLog());
   log.hiddenExerciseIds = [];
   log.warmupDone = [];
   log.queued = [];
-  if(kind==='custom'){
+  if(kind==='session'){
+    const session = getSession(dayKey);
     log.customSession = true;
+    log.sessionId = session ? session.id : dayKey;
+    log.dayKey = weekdayKey();
+    log.plan = clone((session && session.exercises) || []);
+    log.plan.forEach(row=>{ row.sessionOnly = true; });
+    log.planName = (session && session.name) || 'Session';
+    log.warmups = warmupsForSession(session || {exercises:log.plan, warmups:null});
+  } else if(kind==='custom'){
+    log.customSession = true;
+    log.sessionId = null;
     log.dayKey = weekdayKey();
     log.plan = [];
     log.planName = 'Custom';
@@ -374,6 +384,7 @@ function applyTodaySession(kind, dayKey){
   } else if(kind==='day'){
     const routine = splitDayFor(dayKey);
     log.customSession = false;
+    log.sessionId = null;
     log.dayKey = dayKey;
     log.plan = clone(routine.exercises || []);
     log.plan.forEach(row=>{ row.sessionOnly = false; });
@@ -381,6 +392,7 @@ function applyTodaySession(kind, dayKey){
     log.warmups = warmupsForSwappedSession(log, routine);
   } else {
     log.customSession = false;
+    log.sessionId = null;
     log.dayKey = weekdayKey();
     log.plan = null;
     log.planName = '';
@@ -388,6 +400,28 @@ function applyTodaySession(kind, dayKey){
   }
   saveData(DATA);
   renderApp();
+}
+/* Pull a saved session into today's plan when that session is in use.
+   Rows already logged today that are not on the session stay on the list. */
+function syncTodayFromSession(sessionId){
+  if(!sessionId) return false;
+  const session = getSession(sessionId);
+  if(!session) return false;
+  const log = homePlanLog({fromSave:true});
+  if(!log || !log.customSession || log.sessionId!==sessionId) return false;
+  const incoming = clone(session.exercises || []);
+  incoming.forEach(row=>{ row.sessionOnly = true; });
+  const incomingIds = new Set(incoming.map(r=>r.exerciseId));
+  const extras = (log.plan||[]).filter(row=>{
+    if(!row || !row.exerciseId || incomingIds.has(row.exerciseId)) return false;
+    return setsInLogFor(log, row.exerciseId).length>0;
+  });
+  log.plan = incoming.concat(extras);
+  log.planName = session.name || 'Session';
+  log.warmups = warmupsForSession(session);
+  const wuIds = new Set((log.warmups||[]).map(w=>w && w.id).filter(Boolean));
+  log.warmupDone = (Array.isArray(log.warmupDone) ? log.warmupDone : []).filter(id=> wuIds.has(id));
+  return true;
 }
 function commitExerciseToSplit(log, exerciseId){
   const dayKey = log.dayKey || weekdayKey();
@@ -484,11 +518,11 @@ function queueExerciseForToday(exerciseId){
     return;
   }
   persistLog(log);
-  const dayKey = weekdayKey();
+  const dayKey = log.dayKey || weekdayKey();
   if(!Array.isArray(log.queued)) log.queued = [];
-  const inSplit = exerciseInSplit(dayKey, exerciseId);
+  const inPlan = planForLog(log).some(r=>r && r.exerciseId===exerciseId);
   const queued = log.queued.some(r=>r.exerciseId===exerciseId);
-  if(inSplit || queued){ showToast("Already in today's plan"); return; }
+  if(inPlan || queued){ showToast("Already in today's plan"); return; }
   const row = planRowForNewExercise(exerciseId,{goal:DATA.settings.goal, dayKey});
   row.sessionOnly = true;
   log.queued.push(row);

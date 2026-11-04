@@ -16,6 +16,78 @@ How this file works
 ### Fixes
 ### Nerd stuff
 
+# v1.8.0
+## 4 November 2026
+### Features
+- **Update from inside the app.** Tap Update now and the new version downloads and installs. No leftover APK in Downloads.
+- **Focus next.** On Stats, Overview names the one thing worth fixing and why — a muscle you skipped, one under its weekly sets, a stalled lift, or a push/pull imbalance. Tap through to that muscle or PR history.
+- **Badge shelf.** Six ladders now: PRs, strength climb, streak, tonnes, sessions and coverage. Medallions, progress to the next one, and a little celebration when you unlock something new.
+- **Tap a day, see that day.** On History, tap any past square in Days in the gym and Workout summary switches to that day — sets, time, records, and muscle work. Missed a day? It says so, with a little guilt trip.
+- **Full body day.** Under Something else?, pick Full Body for a light 7-exercise session that works your whole body. It is a gentle way back after time off. Your split stays as it is.
+- **Edit what's in Something else?** Every day and session has a gear. A split day opens its Split editor. Full Body and your own sessions open the same editor and keep their own list, so your split stays as it is. "+ New session" saves a session you can pick on any day.
+- **Obliques and neck.** Both are muscles now. Tap them on the Stats map. Russian Twist, Side Plank and Cable Woodchop count as obliques. Side Bend, Pallof Press, Neck Curl and Neck Extension are in the library.
+### Improvements
+- Badges are medallions with a progress ring and a shelf you can browse by ladder.
+- Focus next only judges muscles on your split (and recent work), so neck and forearms stop hogging “weakest link.”
+- Days in the gym now sits above Workout summary, so you pick a day first.
+- Stats and History start fresh when you leave and come back — no leftover muscle or day selection.
+- Updates on Stats and History animate without the page jumping: the card morphs, the title types in, numbers count up, and muscle bars grow.
+- **The body map is easier to tap.** Traps, the side of the ribs, the inner thigh, the hip front and the shin now open their muscle. Taps just between muscles still count.
+- A muscle on today's plan shows only the selected outline while you have it open.
+- Stats Overview lays its four numbers out two by two, so "Lifts climbing" no longer sits alone on a second row.
+- Workout lines in History keep "38 min", "18 sets" and similar together instead of breaking a number from its unit.
+- Settings: "Appearance" uses the same label style as the fields below it, and "FAQ's" now reads "FAQs".
+- History opens faster: it no longer works out a volume comparison that nothing showed.
+### Fixes
+- **Your workouts no longer vanish after an update or restart.** Saving a weight jump on an exercise's default sets, or a warm-up with no how-to text, could make the app start over with an empty log on the next launch. That can't happen now. If it already happened to you and you haven't logged anything since, your old workouts come back the next time you open the app.
+- A warm-up you wrote yourself that mentions a band, cable or machine no longer resets that day's whole warm-up list each time the app opens.
+- Closing an exercise's gear sheet from inside the Split day editor brings the editor back with your unsaved changes, instead of throwing the day away.
+- Resetting only "Settings" no longer sends you back to the Welcome screen or brings back presets you had deleted.
+- After resetting your history, the Spotter's coaching on each exercise starts fresh instead of quoting old sessions.
+- Deleting an exercise from your library also removes it from your saved sessions, so they no longer show an "Unknown exercise" row.
+- Deleting a warm-up from its edit screen closes its old detail sheet too.
+- Changing "Sets for new exercises" and tapping Update split now also updates today's plan, and marks the preset as yours so a future update doesn't overwrite it.
+- "Add to today" checks the workout you're actually doing today, so a swapped day or a saved session no longer says "Already in today's plan" for an exercise that isn't.
+- Editing a set no longer removes its "Strength" tag.
+- The Spotter stops offering "Hit 10+" style tips once you've hit your sets, even if one of them was a drop set.
+- Tapping Settings while you're in Edit exercises or the Warm-up library clears your search and filter, the same as the Back button.
+- Turning on rest notifications switches back off if your phone blocks them, instead of looking on but doing nothing.
+- On Android, the plank and treadmill "time's up" alert is no longer cancelled while the app is in the background.
+- The Android "Rest alerts" tip sheet shows its Allow now and Not now buttons again.
+- Tapping badges quickly no longer leaves the previous badge's text showing.
+- Small text fixes: a badge never says "0 more tonnes", and progress bars can't break when a target is zero.
+### Nerd stuff
+- In-app APK updates: `AppUpdater` Capacitor plugin (`canInstall`, `openInstallSettings`, `download` with progress + SHA-256, `PackageInstaller` `install`), `REQUEST_INSTALL_PACKAGES`, `sha256` in `version.json`, and cache wipe on plugin `load()`. Settings sheet uses it via `bindInAppUpdate` with a download-page fallback for older APKs.
+- `statsFocusNext`, `TRAINING.focusTargets`, `BADGE_LADDERS`, `badgeLadderState`, `featuredBadge`, `bestStreakDays`, `bestWeekMuscleCoverage`, `badgeMedalHtml`, `settings.badgesSeen` / `badgesSeenSeeded`. Removed `statsWeakestLink`, `muscleProgressScore`, `currentStatsBadge`, `nextBadgesAfter`.
+- `historyDay`, `selectHistoryDay`, `historyDaySummaryCard`, `refreshHistorySummary`, `refreshStatsDetail`, `swapDetailCard`, `outerH`, span-based `typeInto`, `resetTabState`. Stats muscle and History day swaps update in place instead of `renderApp()`.
+- `DATA.sessions`, `ensureBuiltinSessions`, `settings.dismissedSessions`, `log.sessionId`, `buildFullBodyPlan`, `openPlanListEditor`, `openSessionEditor`, `openSessionRowSheet`, and `syncTodayFromSession`.
+- `SLUG_ALIAS` / `canonicalSlug`, `.bm-hit` halos, `settings.muscleTagsV2` retag, and `neck` moved from `BODY_MAP_INERT` to `BODY_MAP_MUSCLES`.
+- Load-time data wipe: `migrate()` runs inside `let DATA = loadData()` while `03-storage.js` is still loading, so it threw on `roundTo` (from `06-format.js`) and on reading `DATA` before initialisation (TDZ). `loadData` treated that as a corrupt save and wrote `defaultData()` over it. Fixes:
+  - `roundTo` moved into `03-storage.js`.
+  - New `liveData()` returns `loadingData` (the save being migrated) until `dataReady`; used by `defaultPlanSets`, `getWarmupLibraryItem`, `warmupsForMuscle`, `searchWarmups` and `suggestWarmupsForExercises`.
+  - `saveData` guards `showToast`.
+  - `loadData` is rewritten around `parseAndMigrate()`, shows a toast when it falls back to defaults, and calls `recoverBrokenSave()`, which restores `liftlog_data_v2_broken` when the current save has no logged sets.
+- `migrate` is more defensive: missing `logs`, `log.sets`, `split.days`, null rows, and a non-string legacy `equipment` are handled. Split and preset rows share one `migrateDayRows` helper. The gear warm-up sweep runs once, behind `settings.gearWarmupsSwept`, via `ensureDayWarmups(..., sweepGear)`.
+- `applyDataReset('settings')` keeps bookkeeping keys (`onboarded`, `dismissedPresets`, `presetsVersion`, `prRulesVersion`, badge-seen state, one-time migration flags). History reset calls `spotterForget()`.
+- `typeInto` uses a per-node token, so an older animation can't finish over a newer one.
+- `tickHolds` skips while `document.hidden`.
+- `gymYearObserver` observes only the live root.
+- The exercise detail chart is kept in `exerciseDetailChart` and destroyed before redraw.
+- `openRestBatteryHint` wraps its template in one root (`el()` returns only `firstChild`).
+- `resetSettingsScreen()` is shared by `goToTab` and `backToSettings`.
+- `queueExerciseForToday` checks `planForLog(log)`.
+- `deleteExerciseFromLibrary` strips `DATA.sessions`.
+- The day editor's gear sheet passes `onClosed: redraw`.
+- Dead code removed (about 650 lines of JS and 33 unused CSS rules):
+  - Sheets and screens: `openLogSetSheet`, `openSupersetLogSheet`, `openSessionPlanSheet`, `openLibrarySheet`, `renderRecordsScreen`, `renderRecordsMuscleScreen`, `metricFieldsHtml`, `readMetricFields`, `deleteLoggedSet` and `supersetSeed`.
+  - Spotter greeting helpers: `spotterGreeting` and its helpers.
+  - Stats and model helpers: `statsMuscleLoad30d`, `bodyMapLevels`, `exercisesWithPrs`, `appHasAnyPrs`, `roundToPlate`, `exercisesForMuscle` and `formatPrMomentLine`.
+  - Drop-set stage helpers: `defaultDropStages`, `stageFieldsHtml` and `readStageFields`.
+  - UI helpers: `cancelAllHoldNotifications` and `spotterCountUp`.
+  - History charts: `historyCharts` / `destroyHistoryCharts` and `logsVolumeLoad`.
+  - The unused `historyInsights` fields.
+  - CSS rules for `.ex-card`, `.fab`, `.diffchip`, `.ss-block`, `.skel`, `.rec-head`, `.hit-last` / `.hit-suggest` and others.
+
 # v1.7.0
 ## 2 November 2026
 ### Features

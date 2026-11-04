@@ -1,8 +1,8 @@
 /* ============================ §1 CONFIG ============================ */
 const APP_NAME = "TrackA'gain";
 /* Stamped by the release script (trackagain-capacitor-project/trackagain/release.ps1); don't edit by hand. */
-const APP_VERSION = '1.7.0';
-const APP_BUILD = 8;
+const APP_VERSION = '1.8.0';
+const APP_BUILD = 9;
 const SITE_URL = 'https://nirray2392.github.io/TrackAgain/';
 const UPDATE_URL = SITE_URL + 'version.json';
 const STORAGE_KEY = 'liftlog_data_v2'; // legacy key — renaming would wipe saved workouts
@@ -32,6 +32,14 @@ const TRAINING = {
   strengthIntentCredit: 0.5,     // cap for sets the user marked "strength" (hypertrophy goal)
   secondaryMuscleShare: 0.5,     // a secondary muscle banks half an effective set
   weeklyEffectiveSetTarget: 12,  // reference line for the per-muscle bars
+  /* Per-muscle weekly effective-set targets for Focus next. Smaller muscles
+     sit lower so neck and calves do not always look neglected. */
+  focusTargets: {
+    default: 12,
+    byMuscle: {
+      'Neck':6, 'Forearms':6, 'Obliques':6, 'Calves':6, 'Lower Back':6
+    }
+  },
 
   /* Load progression. Increases are a % of current load, rounded to the equipment
      step (or the exercise's own loadStep) and never smaller than that step. */

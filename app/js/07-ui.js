@@ -26,40 +26,85 @@ const ICON_PATHS = {
   timer:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M10 2h4"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   dumbbell:'<path d="M6.5 6.5v11"/><path d="M17.5 6.5v11"/><path d="M4 9v6"/><path d="M20 9v6"/><path d="M6.5 12h11"/>',
+  stack:'<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/>',
+  body:'<circle cx="12" cy="5" r="2.5"/><path d="M12 8v5"/><path d="m8 10 4 3 4-3"/><path d="M12 13v4"/><path d="m9 21 3-4 3 4"/>',
+  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   download:'<path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/>'
 };
 function icon(name, size){
   size = size || 20;
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]||''}</svg>`;
 }
-/* Front + back muscle map. Today = spark outline; selected = white/black stroke. No volume shading. */
+/* Hex medallion for the badge shelf. state: earned | next | locked. */
+function badgeMedalHtml(step, ladder, opts){
+  opts = opts || {};
+  const state = opts.state || 'locked';
+  const pct = Math.max(0, Math.min(1, opts.pct==null ? (state==='earned'?1:0) : opts.pct));
+  const size = opts.size || 56;
+  const stepIdx = typeof opts.stepIdx==='number' ? opts.stepIdx
+    : Math.max(0, (ladder.steps||[]).findIndex(s=> s===step || (step && s.name===step.name)));
+  const tier = opts.tier || (typeof badgeTier==='function' ? badgeTier(ladder, stepIdx) : 'silver');
+  const r = 18, cx = 24, cy = 24;
+  const circ = 2*Math.PI*r;
+  const dash = state==='locked' ? 0 : circ*pct;
+  const glyph = ICON_PATHS[ladder.iconKey] || ICON_PATHS.trophy || '';
+  const lock = state==='locked' ? (ICON_PATHS.lock||'') : '';
+  const hex = 'M12 2.5 L21.5 8 L21.5 16 L12 21.5 L2.5 16 L2.5 8 Z';
+  const label = escapeHtml((step && step.name) || '');
+  return `<span class="badge-medal tier-${tier} is-${state}" style="width:${size}px;height:${size}px;" title="${label}" role="img" aria-label="${label}">
+    <svg viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true">
+      <path class="bm-hex" d="${hex}"/>
+      <circle class="bm-ring-track" cx="${cx}" cy="${cy}" r="${r}" fill="none"/>
+      <circle class="bm-ring" cx="${cx}" cy="${cy}" r="${r}" fill="none"
+        stroke-dasharray="${dash.toFixed(2)} ${circ.toFixed(2)}"
+        stroke-dashoffset="${(circ*0.25).toFixed(2)}"
+        transform="rotate(-90 ${cx} ${cy})"/>
+      <g class="bm-glyph" transform="translate(12,12) scale(1)">${glyph}</g>
+      ${lock ? `<g class="bm-lock" transform="translate(16,16) scale(0.65)">${lock}</g>` : ''}
+    </svg>
+  </span>`;
+}
+/* Front + back muscle map. Today = spark outline; selected = white/black stroke. No volume shading.
+   Drawn regions may alias to a canonical slug (traps → Upper Back). Hit halos catch gap taps. */
 function bodyMapHtml(_levels, todaySlugs, selectedSlug){
   const paths = (typeof BODY_MAP_PATHS!=='undefined' && BODY_MAP_PATHS.male) || null;
   if(!paths) return '<div class="bodymap bm-missing"><p class="faint small">Body map unavailable.</p></div>';
   const today = todaySlugs instanceof Set ? todaySlugs : new Set(todaySlugs||[]);
   const inert = typeof BODY_MAP_INERT!=='undefined' ? BODY_MAP_INERT : [];
   const muscles = typeof BODY_MAP_MUSCLES!=='undefined' ? BODY_MAP_MUSCLES : [];
+  const canon = typeof canonicalSlug==='function' ? canonicalSlug : (s=>s);
   const viewHtml = (view)=>{
     const sil = inert.map(slug=> (view.p[slug]||[]).map((d,i)=>
       `<path class="bm-sil" d="${d}"></path>`).join('')).join('');
-    const ms = muscles.map(slug=> (view.p[slug]||[]).map((d,i)=>{
-      const tap = typeof CLICKABLE_SLUGS!=='undefined' && CLICKABLE_SLUGS.includes(slug);
-      const cls = ['bm-m', 'l0', today.has(slug)?'today':'', selectedSlug===slug?'sel':'', tap?'tap':''].filter(Boolean).join(' ');
-      const label = typeof labelForSlug==='function' ? labelForSlug(slug) : slug;
-      return `<path class="${cls}" data-slug="${slug}" d="${d}" ${tap?`role="button" tabindex="0" aria-label="${escapeHtml(label)}" aria-pressed="${selectedSlug===slug?'true':'false'}"`:''}><title>${escapeHtml(label)}</title></path>`;
-    }).join('')).join('');
-    return `<svg class="bm-v" viewBox="${view.vb}" role="group">${sil}${ms}</svg>`;
+    const hits = [];
+    const ms = [];
+    muscles.forEach(slug=>{
+      const key = canon(slug);
+      const tap = typeof CLICKABLE_SLUGS!=='undefined' && CLICKABLE_SLUGS.includes(key);
+      const label = typeof labelForSlug==='function' ? labelForSlug(key) : key;
+      (view.p[slug]||[]).forEach(d=>{
+        if(tap) hits.push(`<path class="bm-hit" data-slug="${key}" d="${d}" aria-hidden="true"></path>`);
+        const cls = ['bm-m', 'l0', today.has(key)?'today':'', selectedSlug===key?'sel':'', tap?'tap':''].filter(Boolean).join(' ');
+        ms.push(`<path class="${cls}" data-slug="${key}" d="${d}" ${tap?`role="button" tabindex="0" aria-label="${escapeHtml(label)}" aria-pressed="${selectedSlug===key?'true':'false'}"`:''}><title>${escapeHtml(label)}</title></path>`);
+      });
+    });
+    return `<svg class="bm-v" viewBox="${view.vb}" role="group">${sil}${hits.join('')}${ms.join('')}</svg>`;
   };
   return `<div class="bodymap tappable">${viewHtml(paths.front)}${viewHtml(paths.back)}</div>`;
 }
 function bindBodyMapClicks(root, onMuscle){
-  qa('.bm-m.tap', root).forEach(path=>{
-    const fire = ()=> onMuscle(path.getAttribute('data-slug'));
-    path.onclick = fire;
-    path.onkeydown = e=>{
-      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); fire(); }
+  const bind = (path, withKeys)=>{
+    const fire = (fromKeys)=>{
+      onMuscle(path.getAttribute('data-slug'));
+      if(!fromKeys && typeof path.blur==='function') path.blur();
     };
-  });
+    path.onclick = ()=> fire(false);
+    if(withKeys) path.onkeydown = e=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); fire(true); }
+    };
+  };
+  qa('.bm-hit', root).forEach(path=> bind(path, false));
+  qa('.bm-m.tap', root).forEach(path=> bind(path, true));
 }
 function logoMarkHtml(){
   return `<svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M8 19.5L16 10.5L24 19.5" stroke="#000000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22.5H22" stroke="#000000" stroke-width="2.4" stroke-linecap="round"/></svg>`;
@@ -731,6 +776,246 @@ function setRowsInto(container, sets, metric, handlers){
   });
 }
 
+/* Detail-card swap used by Stats (muscle) and History (day). Height morphs,
+   the title types in, plain numbers count up, and muscle bars grow. */
+function prefersReducedMotion(){
+  try{ return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  catch(e){ return false; }
+}
+/* Offset height plus top and bottom margins — the space the card claims in flow. */
+function outerH(node){
+  if(!node) return 0;
+  const s = getComputedStyle(node);
+  return node.offsetHeight + (parseFloat(s.marginTop)||0) + (parseFloat(s.marginBottom)||0);
+}
+function cardMargins(node){
+  const s = getComputedStyle(node);
+  return {top:parseFloat(s.marginTop)||0, bottom:parseFloat(s.marginBottom)||0};
+}
+/* Put the card in the morph shell: shell takes the card's margins so overflow:hidden
+   does not eat the gap above/below, and height tracks the content box only. */
+function seatInSwapShell(shell, card){
+  const m = cardMargins(card);
+  const h = Math.max(outerH(card) - m.top - m.bottom, 1);
+  shell.style.marginTop = m.top+'px';
+  shell.style.marginBottom = m.bottom+'px';
+  shell.style.height = h+'px';
+  card.style.marginTop = '0';
+  card.style.marginBottom = '0';
+  shell.appendChild(card);
+  return h;
+}
+function clearSwapSeat(card){
+  if(!card) return;
+  card.style.marginTop = '';
+  card.style.marginBottom = '';
+}
+function typeInto(node, text){
+  if(!node) return Promise.resolve();
+  node._typeToken = null;
+  const full = text!=null ? String(text) : (node.dataset.full || node.textContent || '');
+  if(!full){ node.textContent = ''; return Promise.resolve(); }
+  if(prefersReducedMotion() || typeof requestAnimationFrame!=='function'){
+    node.textContent = full;
+    return Promise.resolve();
+  }
+  let on = q('.tw-on', node);
+  let off = q('.tw-off', node);
+  if(!on || !off){
+    node.textContent = '';
+    on = document.createElement('span');
+    on.className = 'tw-on';
+    off = document.createElement('span');
+    off.className = 'tw-off';
+    off.textContent = full;
+    node.appendChild(on);
+    node.appendChild(off);
+  }
+  on.classList.add('is-typing');
+  const dur = Math.min(980, Math.max(260, full.length*20));
+  const start = (typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
+  const token = node._typeToken = {};
+  return new Promise(resolve=>{
+    const frame = (now)=>{
+      if(!node.isConnected || node._typeToken!==token){ resolve(); return; }
+      const t = Math.min(1, ((now||Date.now())-start)/dur);
+      const count = Math.max(0, Math.round(t*full.length));
+      on.textContent = full.slice(0, count);
+      off.textContent = full.slice(count);
+      if(t<1){ requestAnimationFrame(frame); return; }
+      node.textContent = full;
+      resolve();
+    };
+    requestAnimationFrame(frame);
+  });
+}
+function countUpStatVals(root){
+  if(!root || prefersReducedMotion()) return;
+  qa('.stat-box .val', root).forEach(node=>{
+    if(node.children.length) return;
+    if(node.dataset.counted==='1') return;
+    const text = (node.textContent || '').trim();
+    const match = text.match(/^(\d+(?:\.\d+)?)$/);
+    if(!match) return;
+    const target = parseFloat(match[1]);
+    if(!isFinite(target) || target<=0 || target>99999) return;
+    node.dataset.counted = '1';
+    const decimals = match[1].indexOf('.')>=0 ? match[1].split('.')[1].length : 0;
+    const start = (typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
+    const paint = (now)=>{
+      if(!node.isConnected) return;
+      const t = Math.max(0, Math.min(1, ((now||Date.now())-start)/500));
+      const eased = 1 - Math.pow(1-t, 3);
+      const val = Math.max(0, target * eased);
+      node.textContent = decimals ? val.toFixed(decimals) : String(Math.round(val));
+      if(t<1) requestAnimationFrame(paint);
+      else node.textContent = text;
+    };
+    requestAnimationFrame(paint);
+  });
+}
+function prepDetailEnter(root){
+  if(!root) return;
+  qa('[data-type-title]', root).forEach(node=>{
+    if(node.dataset.full==null) node.dataset.full = node.textContent || '';
+    const full = node.dataset.full;
+    if(prefersReducedMotion()){ node.textContent = full; return; }
+    if(q('.tw-on', node) && q('.tw-off', node)) return;
+    node.textContent = '';
+    const on = document.createElement('span');
+    on.className = 'tw-on';
+    const off = document.createElement('span');
+    off.className = 'tw-off';
+    off.textContent = full;
+    node.appendChild(on);
+    node.appendChild(off);
+  });
+  qa('.mw-bar span', root).forEach(span=>{
+    if(span.dataset.targetWidth!=null) return;
+    span.dataset.targetWidth = span.style.width || '0%';
+    if(!prefersReducedMotion()) span.style.width = '0%';
+  });
+}
+function playDetailEnter(root){
+  if(!root) return;
+  if(prefersReducedMotion()){
+    qa('[data-type-title]', root).forEach(node=>{
+      if(node.dataset.full!=null) node.textContent = node.dataset.full;
+    });
+    qa('.mw-bar span', root).forEach(span=>{
+      if(span.dataset.targetWidth!=null) span.style.width = span.dataset.targetWidth;
+    });
+    return;
+  }
+  const titles = qa('[data-type-title]', root);
+  let chain = Promise.resolve();
+  titles.forEach(node=>{
+    chain = chain.then(()=> typeInto(node, node.dataset.full));
+  });
+  countUpStatVals(root);
+  requestAnimationFrame(()=>{
+    qa('.mw-bar span', root).forEach((span, i)=>{
+      span.style.transition = `width 420ms var(--ease) ${i*40}ms`;
+      span.style.width = span.dataset.targetWidth || '0%';
+    });
+    qa('.rec-row, .mw-row', root).forEach((row, i)=>{
+      row.classList.add('detail-row-in');
+      row.style.animationDelay = (i*40)+'ms';
+    });
+    const empty = q('[data-empty-pulse]', root);
+    if(empty) empty.classList.add('detail-empty-pulse');
+  });
+}
+let detailSwapToken = 0;
+function swapDetailCard(oldNode, newNode){
+  if(!newNode) return Promise.resolve(null);
+  if(!oldNode || !oldNode.parentNode){
+    return Promise.resolve(newNode);
+  }
+  if(oldNode===newNode) return Promise.resolve(newNode);
+  // Mid-flight morph: snap the shell closed so rapid taps do not nest shells.
+  if(oldNode.parentElement && oldNode.parentElement.classList.contains('detail-swap-shell')){
+    const busy = oldNode.parentElement;
+    clearSwapSeat(oldNode);
+    busy.replaceWith(newNode);
+    detailSwapToken += 1;
+    return Promise.resolve(newNode);
+  }
+  if(prefersReducedMotion()){
+    oldNode.replaceWith(newNode);
+    return Promise.resolve(newNode);
+  }
+  const token = ++detailSwapToken;
+  const parent = oldNode.parentNode;
+  const width = oldNode.offsetWidth;
+
+  // Measure the enter layout (title reserved, bars at 0) so height does not jump mid-type.
+  const probe = newNode.cloneNode(true);
+  probe.style.cssText = `visibility:hidden;position:absolute;left:-9999px;width:${width}px;`;
+  parent.appendChild(probe);
+  prepDetailEnter(probe);
+  const toH = probe.offsetHeight;
+  const toM = cardMargins(probe);
+  probe.remove();
+
+  const shell = document.createElement('div');
+  shell.className = 'detail-swap-shell';
+  parent.insertBefore(shell, oldNode);
+  const fromH = seatInSwapShell(shell, oldNode);
+  oldNode.classList.add('detail-swap-out');
+
+  return new Promise(resolve=>{
+    setTimeout(()=>{
+      if(token!==detailSwapToken || !shell.isConnected){ resolve(newNode); return; }
+      clearSwapSeat(oldNode);
+      oldNode.remove();
+      prepDetailEnter(newNode);
+      newNode.classList.add('detail-swap-in');
+      if(newNode.classList.contains('stats-detail')) newNode.style.animation = 'none';
+      newNode.style.marginTop = '0';
+      newNode.style.marginBottom = '0';
+      shell.appendChild(newNode);
+      shell.style.marginTop = toM.top+'px';
+      shell.style.marginBottom = toM.bottom+'px';
+      void shell.offsetHeight;
+      shell.style.height = Math.max(toH, 1)+'px';
+      playDetailEnter(newNode);
+
+      let done = false;
+      const finish = ()=>{
+        if(done) return;
+        done = true;
+        if(token!==detailSwapToken){ resolve(newNode); return; }
+        if(shell.parentNode && newNode.parentNode===shell){
+          shell.parentNode.insertBefore(newNode, shell);
+          shell.remove();
+        }
+        clearSwapSeat(newNode);
+        newNode.classList.remove('detail-swap-in');
+        newNode.style.animation = '';
+        resolve(newNode);
+      };
+      const onEnd = (e)=>{
+        if(e.target!==shell || e.propertyName!=='height') return;
+        shell.removeEventListener('transitionend', onEnd);
+        clearTimeout(fallback);
+        finish();
+      };
+      shell.addEventListener('transitionend', onEnd);
+      const fallback = setTimeout(()=>{
+        shell.removeEventListener('transitionend', onEnd);
+        finish();
+      }, 450);
+      // Same height: transitionend may never fire.
+      if(Math.abs(fromH - toH) < 1){
+        shell.removeEventListener('transitionend', onEnd);
+        clearTimeout(fallback);
+        setTimeout(finish, 240);
+      }
+    }, 120);
+  });
+}
+
 /* Per-muscle effective sets + volume for a group of sets. */
 function muscleWorkCard(sets, title){
   const rows = muscleWorkForSets(sets).filter(r=>r.effectiveSets>=0.2).slice(0,6);
@@ -941,17 +1226,18 @@ function openRestBatteryHint(){
     title:'Rest alerts',
     onRequestClose(sheet){ dismissRestBatteryHint(); sheet.close(); },
     build(body, sheet){
-      body.appendChild(el(`
+      body.appendChild(el(`<div>
         <p>Android can delay or silence the rest timer when the screen is off. Allow the prompts for notifications, Alarms &amp; reminders, and unrestricted battery.</p>
         <p class="faint small" style="margin-top:10px;">If no prompt appears, set it once: Settings → Apps → ${escapeHtml(APP_NAME)} → Battery → Unrestricted. Also turn on Alarms &amp; reminders if you see it.</p>
         <button class="btn" data-allow style="width:100%;margin-top:16px;">Allow now</button>
-        <button class="btn secondary" data-later style="width:100%;margin-top:8px;">Not now</button>`));
+        <button class="btn secondary" data-later style="width:100%;margin-top:8px;">Not now</button>
+      </div>`));
       q('[data-allow]', body).onclick = async ()=>{
         DATA.settings.restSetupAsked = true;
         saveData(DATA);
         await runRestAlertSetup();
         const battery = await batteryOptimizationState();
-        if(battery==='unrestricted'){
+        if(battery==='unrestricted' && body.isConnected){
           dismissRestBatteryHint();
           sheet.close();
         }
@@ -1206,16 +1492,6 @@ function cancelHoldNotification(setId){
   if(!restNotificationsAvailable() || !setId) return;
   capPlugin('LocalNotifications').cancel({notifications:[{id:restNotificationId('hold:'+setId)}]}).catch(()=>{});
 }
-function cancelAllHoldNotifications(){
-  Object.keys(holdTokens).forEach(id=> cancelHoldNotification(id));
-  if(!restNotificationsAvailable()) return;
-  const LN = capPlugin('LocalNotifications');
-  if(typeof LN.getPending!=='function') return;
-  LN.getPending().then(res=>{
-    const holds = ((res && res.notifications) || []).filter(n=> n && n.extra && n.extra.type==='hold');
-    if(holds.length) return LN.cancel({notifications:holds.map(n=>({id:n.id}))});
-  }).catch(()=>{});
-}
 function releaseHold(set){
   if(!set || typeof set.holdStartedAt!=='number') return;
   cancelHoldNotification(set.id);
@@ -1366,6 +1642,9 @@ function holdControlsEl(){
   return row;
 }
 function tickHolds(){
+  /* In the background the native alert announces the end; completing here would
+     cancel it. resumeHoldCountdown() finishes the hold when the app is back. */
+  if(document.hidden) return;
   const log = activeWorkoutLog();
   if(!log || !log.sets){ clearHoldTicker(); return; }
   const pending = log.sets.filter(s=> typeof s.holdStartedAt==='number');

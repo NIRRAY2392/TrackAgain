@@ -3,19 +3,20 @@
    the library, the Stats tab and the alternatives engine automatically. */
 const MUSCLE_DEFS = [
   ['Chest','Push'],['Shoulders','Push'],['Triceps','Push'],
-  ['Lats','Pull'],['Upper Back','Pull'],['Rear Delts','Pull'],['Biceps','Pull'],['Forearms','Pull'],
+  ['Lats','Pull'],['Upper Back','Pull'],['Neck','Pull'],['Rear Delts','Pull'],['Biceps','Pull'],['Forearms','Pull'],
   ['Quads','Legs'],['Hamstrings','Legs'],['Glutes','Legs'],['Calves','Legs'],
-  ['Abs','Core'],['Lower Back','Core'],['Other','Other']
+  ['Abs','Core'],['Obliques','Core'],['Lower Back','Core'],['Other','Other']
 ];
 const MUSCLES = MUSCLE_DEFS.map(m=>m[0]);
 const MUSCLE_REGION = Object.fromEntries(MUSCLE_DEFS);
 const REGION_ORDER = ['Push','Pull','Legs','Core','Other'];
 const MUSCLE_HINT = {
   'Chest':'Presses & flyes','Shoulders':'Front / side delts','Triceps':'Back of the arm',
-  'Lats':'Pull-ups & pulldowns','Upper Back':'Rows, mid-back & traps','Rear Delts':'Face pulls & rear flyes',
+  'Lats':'Pull-ups & pulldowns','Upper Back':'Rows, mid-back & traps','Neck':'Neck curls & extensions',
+  'Rear Delts':'Face pulls & rear flyes',
   'Biceps':'Curls','Forearms':'Grip & wrists','Quads':'Squats, presses, extensions',
   'Hamstrings':'Hinges & leg curls','Glutes':'Thrusts & bridges','Calves':'Calf raises',
-  'Abs':'Core work','Lower Back':'Extensions','Other':'Anything else'
+  'Abs':'Core work','Obliques':'Twists, side planks & chops','Lower Back':'Extensions','Other':'Anything else'
 };
 const LEGACY_MUSCLE_MAP = {Chest:'Chest',Back:'Upper Back',Shoulders:'Shoulders',Triceps:'Triceps',
   Biceps:'Biceps',Legs:'Quads',Core:'Abs',Other:'Other'};
@@ -97,8 +98,11 @@ const CATALOG_RAW = [
   ['Chest-Supported Row','Upper Back',['Lats','Rear Delts'],'horizontal_pull','machine','compound','weight_reps',68],
   ['Pendlay Row','Upper Back',['Lats','Biceps'],'horizontal_pull','barbell','compound','weight_reps',58],
   ['Inverted Row','Upper Back',['Lats','Biceps'],'horizontal_pull','bodyweight','compound','reps_only',48],
-  ['Shrug','Upper Back',['Forearms'],'shrug','dumbbell','isolation','weight_reps',66],
-  ['Barbell Shrug','Upper Back',['Forearms'],'shrug','barbell','isolation','weight_reps',60],
+  ['Shrug','Upper Back',['Forearms','Neck'],'shrug','dumbbell','isolation','weight_reps',66],
+  ['Barbell Shrug','Upper Back',['Forearms','Neck'],'shrug','barbell','isolation','weight_reps',60],
+  /* Neck */
+  ['Neck Curl','Neck',[],'other','other','isolation','weight_reps',30],
+  ['Neck Extension','Neck',['Upper Back'],'other','other','isolation','weight_reps',28],
   /* Rear Delts */
   ['Face Pull','Rear Delts',['Upper Back'],'rear_delt','cable','isolation','weight_reps',84],
   ['Rear Delt Fly','Rear Delts',['Upper Back'],'rear_delt','dumbbell','isolation','weight_reps',78],
@@ -152,15 +156,18 @@ const CATALOG_RAW = [
   ['Calf Press','Calves',[],'calf_raise','machine','isolation','weight_reps',56],
   /* Abs */
   ['Plank','Abs',[],'anti_extension','bodyweight','isolation','time',88],
-  ['Hanging Leg Raise','Abs',['Quads'],'crunch','bodyweight','isolation','reps_only',74],
+  ['Hanging Leg Raise','Abs',['Quads','Obliques'],'crunch','bodyweight','isolation','reps_only',74],
   ['Crunch','Abs',[],'crunch','bodyweight','isolation','reps_only',72],
   ['Cable Crunch','Abs',[],'crunch','cable','isolation','weight_reps',70],
   ['Hanging Knee Raise','Abs',[],'crunch','bodyweight','isolation','reps_only',62],
   ['Ab Wheel Rollout','Abs',['Lats'],'anti_extension','other','isolation','reps_only',60],
-  ['Russian Twist','Abs',[],'rotation','bodyweight','isolation','weighted_bw',58],
-  ['Side Plank','Abs',[],'anti_extension','bodyweight','isolation','time',56],
-  ['Cable Woodchop','Abs',[],'rotation','cable','isolation','weight_reps',44],
-  ['Mountain Climber','Abs',['Quads'],'crunch','bodyweight','isolation','reps_only',40],
+  ['Mountain Climber','Abs',['Quads','Obliques'],'crunch','bodyweight','isolation','reps_only',40],
+  /* Obliques */
+  ['Russian Twist','Obliques',['Abs'],'rotation','bodyweight','isolation','weighted_bw',58],
+  ['Side Plank','Obliques',['Abs'],'anti_extension','bodyweight','isolation','time',56],
+  ['Cable Woodchop','Obliques',['Abs'],'rotation','cable','isolation','weight_reps',44],
+  ['Side Bend','Obliques',['Abs'],'rotation','dumbbell','isolation','weight_reps',46],
+  ['Pallof Press','Obliques',['Abs'],'rotation','cable','isolation','weight_reps',42],
   ['Incline Treadmill Walk','Other',['Quads','Calves'],'other','machine','isolation','time',55],
   /* Lower Back */
   ['Back Extension','Lower Back',['Glutes','Hamstrings'],'extension','bodyweight','isolation','reps_only',56],

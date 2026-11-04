@@ -27,12 +27,9 @@ const SCREENS = {
                  : renderSettingsScreen()
 };
 function goToTab(key){
+  if(key!==VIEW && typeof resetTabState==='function') resetTabState(VIEW);
   if(key==='today') homeScreen = 'landing';
-  if(key==='settings'){
-    if(VIEW==='settings') settingsScreen = 'main';
-  } else {
-    settingsScreen = 'main';
-  }
+  if(key!=='settings' || VIEW==='settings') resetSettingsScreen();
   VIEW = key;
   window.scrollTo(0,0);
   renderApp();
@@ -62,7 +59,7 @@ function openWarmupLibraryScreen(){
   window.scrollTo(0,0);
   renderApp();
 }
-function backToSettings(){
+function resetSettingsScreen(){
   settingsScreen = 'main';
   editExerciseSearch = '';
   editExerciseFilter = 'on';
@@ -70,6 +67,9 @@ function backToSettings(){
   warmupLibrarySearch = '';
   warmupLibraryFilter = 'on';
   openWarmupMuscle = null;
+}
+function backToSettings(){
+  resetSettingsScreen();
   VIEW = 'settings';
   window.scrollTo(0,0);
   renderApp();
@@ -135,7 +135,6 @@ function renderApp(){
   if(!DATA.settings.onboarded){ renderWelcome(); return; }
   closeStaleWorkout();
   maybeTrimAwayTime();
-  destroyHistoryCharts();
   afterHistoryRender = [];
   const app = document.getElementById('app');
   const dateLabel = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
@@ -368,6 +367,8 @@ function renderLanding(){
   const swapped = !log.customSession && log.dayKey && log.dayKey!==weekdayKey();
   const subtitle = log.customSession && !plan.length
     ? 'Custom session — add exercises once you start'
+    : log.customSession && plan.length
+    ? `${sessionName} · ${plan.length} exercise${plan.length===1?'':'s'} planned`
     : plan.length
     ? `${activeSplit().label} · ${sessionName} day · ${plan.length} exercises planned`
     : swapped
@@ -835,8 +836,9 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
   const rows = doneSets.map((set,i)=>{
     if(!set.isWarmup) working++;
     const bonus = !set.isWarmup && working > targetSets;
-    const mainStage = set.isDropSet ? 0 : null;
-    const mainVal = set.isDropSet ? setValueText({...set.stages[0], exerciseId:set.exerciseId}, metric) : setValueText(set, metric);
+    const isDrop = set.isDropSet && Array.isArray(set.stages) && set.stages.length>0;
+    const mainStage = isDrop ? 0 : null;
+    const mainVal = isDrop ? setValueText({...set.stages[0], exerciseId:set.exerciseId}, metric) : setValueText(set, metric);
     let html = `
       <div class="ts-row${bonus?' bonus':''}${set.isWarmup?' warmup':''}${isEditing(set, mainStage)?' editing':''}" data-edit-set="${set.id}" data-stage="${mainStage==null?'':mainStage}" role="button" tabindex="0" aria-label="Edit set ${i+1}">
         <span class="ts-num">${i+1}</span>
@@ -844,7 +846,7 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
         <span class="ts-feel">${set.isWarmup?'Warm-up':effortLabel(set.difficulty)}</span>
         <button type="button" class="ts-del" data-del-set="${set.id}" data-stage="" aria-label="Delete set ${i+1}">${icon('x',15)}</button>
       </div>`;
-    if(set.isDropSet) set.stages.slice(1).forEach((stage,k)=>{
+    if(isDrop) set.stages.slice(1).forEach((stage,k)=>{
       html += `
         <div class="ts-row ts-sub${isEditing(set, k+1)?' editing':''}" data-edit-set="${set.id}" data-stage="${k+1}" role="button" tabindex="0" aria-label="Edit drop ${k+1} of set ${i+1}">
           <span class="ts-branch" aria-hidden="true"></span>
@@ -1145,7 +1147,7 @@ function workoutExerciseCard(planRow, index, log, opts){
   if(updateBtn) updateBtn.onclick = ()=>{
     const values = setValuesFrom(metric, draft);
     if(!validSetValues(values)){ showToast('Enter valid numbers'); return; }
-    updateLoggedSet(editSet, editing.stage, values, draft.effort, draft.warmup, null);
+    updateLoggedSet(editSet, editing.stage, values, draft.effort, draft.warmup, editSet.intent||null);
     endEdit();
     const holdFinished = typeof editSet.holdStartedAt==='number' && holdRemainingMs(editSet)<=0;
     syncHoldToDuration(editSet);
@@ -1357,7 +1359,7 @@ function overloadProgressHtml(status){
   return `
     <div class="sb-progress">
       <span>${escapeHtml(status.progressText)}</span>
-      <div class="meter"><span style="width:${Math.min(100, Math.round(status.qualifyingSessions/status.sessionsRequired*100))}%"></span></div>
+      <div class="meter"><span style="width:${status.sessionsRequired>0 ? Math.min(100, Math.round(status.qualifyingSessions/status.sessionsRequired*100)) : 100}%"></span></div>
     </div>`;
 }
 
@@ -1372,28 +1374,6 @@ const SPOTTER_LABEL = `<div class="sb-label">Spotter's suggestion</div>`;
 function spotterReducedMotion(){
   try{ return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
   catch(e){ return false; }
-}
-function spotterCountUp(node){
-  if(!node || node.dataset.counted==='1' || spotterReducedMotion()) return;
-  node.dataset.counted = '1';
-  const text = node.textContent || '';
-  const match = text.match(/(\d+(?:\.\d+)?)/);
-  if(!match) return;
-  const target = parseFloat(match[1]);
-  if(!isFinite(target) || target<=0 || target>9999) return;
-  const start = (typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
-  const decimals = match[1].indexOf('.')>=0 ? match[1].split('.')[1].length : 0;
-  const paint = (now)=>{
-    const t = Math.max(0, Math.min(1, ((now||Date.now())-start)/400));
-    const eased = 1 - Math.pow(1-t, 3);
-    const val = Math.max(0, target * eased);
-    const shown = decimals ? val.toFixed(decimals) : String(Math.round(val));
-    node.textContent = text.slice(0, match.index) + shown + text.slice(match.index+match[1].length);
-    if(t<1 && typeof requestAnimationFrame==='function') requestAnimationFrame(paint);
-    else node.textContent = text;
-  };
-  if(typeof requestAnimationFrame==='function') requestAnimationFrame(paint);
-  else node.textContent = text;
 }
 function showPrConfetti(){
   if(spotterReducedMotion()) return;
@@ -1537,7 +1517,7 @@ function liveCoachBox(fb, {listKey, draft, metric, latest, fresh, exerciseId, pl
   const vol = fb.volume && fb.volume.last>0 && fb.volume.today>0 ? fb.volume : null;
   const pct = vol ? Math.round(vol.today/vol.last*100) : 0;
   const chips = spotterChipActions(planRow, todaySets||[], status||{}, metric);
-  const allDone = planRow && (todaySets||[]).filter(s=>!s.isWarmup && !s.isDropSet).length >= (planRow.sets||0);
+  const allDone = planRow && (todaySets||[]).filter(s=>!s.isWarmup).length >= (planRow.sets||0);
   const showChips = !allDone && !applied;
   const box = el(`
     <div class="suggest-box coach-box tone-${fb.tone}${fresh?' coach-pop':''}" aria-live="polite">

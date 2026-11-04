@@ -1,58 +1,6 @@
 /* ============================ §9 SHEETS ============================ */
 
 /* --- log / edit a set ------------------------------------------------ */
-function metricFieldId(prefix, name){ return (prefix||'')+name; }
-function metricFieldsHtml(metric, existingSet, prefillWeight, idPrefix, ex){
-  const weight = existingSet ? existingSet.weight : (prefillWeight!=null ? prefillWeight : '');
-  const reps   = existingSet ? existingSet.reps : '';
-  const secs   = existingSet ? existingSet.duration : '';
-  const weightId = metricFieldId(idPrefix,'fldWeight');
-  const repsId = metricFieldId(idPrefix,'fldReps');
-  const secsId = metricFieldId(idPrefix,'fldSecs');
-  if(hasLoadField(metric)){
-    const label = metric==='assisted' ? 'Assistance (kg)' : metric==='weighted_bw' ? 'Added weight (kg, 0 = bodyweight)' : 'Weight (kg)';
-    return `<div class="grid2">
-        <div class="field"><label>${label}</label><input id="${weightId}" type="number" step="0.5" min="0" inputmode="decimal" value="${weight}" placeholder="e.g. 60"></div>
-        <div class="field"><label>Reps</label><input id="${repsId}" type="number" min="1" inputmode="numeric" value="${reps}" placeholder="e.g. 8"></div>
-      </div>
-      ${metric==='assisted'?'<p class="faint small" style="margin:-4px 0 10px;">Lower assistance = stronger 💪</p>':''}`;
-  }
-  if(metric==='reps_only') return `<div class="field"><label>Reps</label><input id="${repsId}" type="number" min="1" inputmode="numeric" value="${reps}" placeholder="e.g. 12"></div>`;
-  if(metric==='time' && isMinuteHold(ex)){
-    const minId = metricFieldId(idPrefix,'fldMins');
-    const filled = secs!=='' && secs!=null;
-    return `<div class="field"><label>Duration</label>${holdFieldsHtml(filled ? secs : null, {minId, secId:secsId, blank:!filled})}</div>`;
-  }
-  if(metric==='time')      return `<div class="field"><label>Duration (seconds)</label><input id="${secsId}" type="number" min="1" inputmode="numeric" value="${secs}" placeholder="e.g. 45"></div>`;
-  return '';
-}
-function readMetricFields(metric, root, idPrefix, ex){
-  if(hasLoadField(metric)){
-    const weightEl = q('#'+metricFieldId(idPrefix,'fldWeight'),root);
-    const repsEl = q('#'+metricFieldId(idPrefix,'fldReps'),root);
-    if(!weightEl || !repsEl) return null;
-    const weight = parseFloat(weightEl.value), reps = parseInt(repsEl.value,10);
-    if(isNaN(weight)||isNaN(reps)||weight<0||reps<=0) return null;
-    return {weight, reps};
-  }
-  if(metric==='reps_only'){
-    const repsEl = q('#'+metricFieldId(idPrefix,'fldReps'),root);
-    if(!repsEl) return null;
-    const reps = parseInt(repsEl.value,10);
-    return (isNaN(reps)||reps<=0) ? null : {reps};
-  }
-  if(metric==='time'){
-    if(isMinuteHold(ex)){
-      return readHoldFields(q('#'+metricFieldId(idPrefix,'fldMins'),root), q('#'+metricFieldId(idPrefix,'fldSecs'),root));
-    }
-    const secsEl = q('#'+metricFieldId(idPrefix,'fldSecs'),root);
-    if(!secsEl) return null;
-    const duration = parseInt(secsEl.value,10);
-    return (isNaN(duration)||duration<=0) ? null : {duration};
-  }
-  return {};
-}
-
 /* Appends one normal set to today's log. Shared by the sheet and the card's inline logger. */
 function logNormalSet(exerciseId, values, effort, isWarmup, intent){
   const log = todayLog();
@@ -141,386 +89,6 @@ function removeSetOrStage(set, stage){
   recomputePRs(set.exerciseId);
   saveData(DATA);
   return snap;
-}
-
-function deleteLoggedSet(set){
-  confirmAction('Delete this set? This cannot be undone.', 'Delete', ()=>{
-    const log = DATA.logs.find(l=> (l.sets||[]).includes(set));
-    if(log){
-      releaseHold(set);
-      log.sets = log.sets.filter(s=>s.id!==set.id);
-    }
-    recomputePRs(set.exerciseId);
-    saveData(DATA);
-    closeSheets();
-    renderApp();
-  });
-}
-
-function openLogSetSheet(opts){
-  const {exerciseId, planRow, existingSet} = opts;
-  const ex = getExercise(exerciseId);
-  const metric = metricOf(ex);
-  const isEdit = !!existingSet;
-  const plannedLoad = !isEdit && loadPlanFor(exerciseId) ? loadPlanFor(exerciseId).weight : null;
-  const normalExisting = (existingSet && !existingSet.isDropSet) ? existingSet : null;
-  let effort = existingSet ? existingSet.difficulty : 'med';
-  let strengthIntent = normalExisting ? normalExisting.intent==='strength' : false;
-  let mode = (existingSet && existingSet.isDropSet) ? 'drop' : (!existingSet && opts.startMode==='drop' ? 'drop' : 'normal');
-  let stages = (existingSet && existingSet.isDropSet) ? existingSet.stages.map(s=>({...s})) : defaultDropStages(metric, plannedLoad);
-  let isWarmup = existingSet ? !!existingSet.isWarmup : false;
-
-  function saveNormalSet(values, intent){
-    if(isEdit){
-      Object.assign(existingSet, values, {difficulty:effort, intent, isDropSet:false, isWarmup});
-      delete existingSet.stages;
-      recomputePRs(exerciseId);
-      saveData(DATA);
-      const holdFinished = typeof existingSet.holdStartedAt==='number' && holdRemainingMs(existingSet)<=0;
-      syncHoldToDuration(existingSet);
-      closeSheets();
-      if(!holdFinished) showToast('Set updated');
-      renderApp();
-    } else {
-      const set = logNormalSet(exerciseId, values, effort, isWarmup, intent);
-      closeSheets();
-      const holding = startHoldIfMinute([set]);
-      if(holding) hapticTick(false);
-      else celebrateSet(set);
-      renderApp();
-    }
-  }
-  function saveDropSet(finalStages){
-    if(isEdit){
-      releaseHold(existingSet);
-      Object.assign(existingSet, {difficulty:effort, intent:null, isDropSet:true, stages:finalStages, isPR:false, isWarmup:false});
-      delete existingSet.weight; delete existingSet.reps; delete existingSet.duration;
-      recomputePRs(exerciseId);
-      saveData(DATA);
-      closeSheets();
-      showToast('Drop set updated');
-      renderApp();
-    } else {
-      const log = todayLog();
-      persistLog(log);
-      const set = {id:uid(), exerciseId, difficulty:effort, intent:null, ts:Date.now(), isPR:false, isDropSet:true, stages:finalStages};
-      log.sets.push(set);
-      promoteStartedExercise(log, exerciseId);
-      markWorkoutActivity(log);
-      saveData(DATA);
-      closeSheets();
-      celebrateSet(set);
-      renderApp();
-    }
-  }
-
-  openSheet({
-    title:`${isEdit?'Edit set':'Log a set'} · ${ex.name}`,
-    build:(body)=>{
-      function renderBody(){
-        body.innerHTML = '';
-        let refreshLowRepWarning = ()=>{};
-        let holdSaveForLowRepWarning = ()=> false;
-        const wrap = el(`
-          <div>
-            <div class="row" style="margin-bottom:14px;">
-              <div class="chip ${mode==='normal'?'on':''}" data-mode="normal" style="flex:1;text-align:center;justify-content:center;">Normal set</div>
-              <div class="chip ${mode==='drop'?'on':''}" data-mode="drop" style="flex:1;text-align:center;justify-content:center;">🔻 Drop set</div>
-            </div>
-            <div data-fields></div>
-            <div class="field">
-              <label>How hard did it feel${mode==='drop'?' overall':''}?</label>
-              <div class="row" data-effort>
-                <div class="diffchip" data-effort-key="easy">Easy</div>
-                <div class="diffchip" data-effort-key="med">Medium</div>
-                <div class="diffchip" data-effort-key="hard">Hard</div>
-              </div>
-            </div>
-            ${planRow && isTreadmill(ex) ? `<p class="faint small">By feel — walk as long as you like</p>` : ''}
-            ${planRow && isMinuteHold(ex) && !isTreadmill(ex) ? `<p class="faint small">Target: ${formatHoldRange(planRow.repsMin, planRow.repsMax)}</p>` : ''}
-            ${planRow && metric!=='time' ? `<p class="faint small">Target: ${formatRepRange(planRow.repsMin, planRow.repsMax)} reps${planRow.rpe?` · RPE ${planRow.rpe}`:''}</p>` : ''}
-            ${mode==='normal' ? `<label class="row" style="gap:8px;margin:12px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
-              <input type="checkbox" data-warmup style="width:auto;" ${isWarmup?'checked':''}>
-              <span>Warm-up set (skipped for PRs, overload, and auto-finish)</span>
-            </label>` : ''}
-            <button class="btn" data-save style="width:100%;margin-top:10px;">${isEdit?'Save changes':(mode==='drop'?'Save drop set':'Save set')}</button>
-            ${isEdit ? '<button class="btn danger" data-delete-set style="width:100%;margin-top:8px;">Delete set</button>' : ''}
-          </div>`);
-        body.appendChild(wrap);
-        const delBtn = q('[data-delete-set]',wrap);
-        if(delBtn) delBtn.onclick = ()=> deleteLoggedSet(existingSet);
-
-        qa('[data-mode]',wrap).forEach(chip=> chip.onclick = ()=>{
-          if(chip.dataset.mode===mode) return;
-          mode = chip.dataset.mode;
-          if(mode==='drop' && stages.length<2) stages = defaultDropStages(metric, plannedLoad);
-          renderBody();
-        });
-
-        const fieldsBox = q('[data-fields]',wrap);
-        if(mode==='normal'){
-          fieldsBox.appendChild(el(`<div>${metricFieldsHtml(metric, normalExisting, plannedLoad, '', ex)}<div data-warn></div></div>`));
-          const warnBox = q('[data-warn]',fieldsBox);
-          const repsInput = q('#fldReps',fieldsBox);
-          // A saved rep count is already committed. Digits still being typed are not.
-          let repsCommitted = !!(normalExisting && normalExisting.reps);
-          let blurTimer = 0;
-          function refreshWarning(){
-            const reps = parseInt(repsInput ? repsInput.value : '', 10);
-            const show = repsCommitted && isLowRepSet({reps, isWarmup}, metric);
-            if(!show){ warnBox.innerHTML=''; return; }
-            if(q('[data-intent]',warnBox)) return; // already shown, keep checkbox state
-            warnBox.innerHTML = '';
-            const node = el(`
-              <div class="warn-box">
-                ⚠️ Very low rep set (under ${TRAINING.lowRepWarningBelow}). That's strength territory — drop the weight if you're chasing size.
-                <label class="pick"><input type="checkbox" data-intent ${strengthIntent?'checked':''}> Count this as a strength set</label>
-              </div>`);
-            q('[data-intent]',node).onchange = (e)=>{ strengthIntent = e.target.checked; };
-            warnBox.appendChild(node);
-          }
-          refreshLowRepWarning = refreshWarning;
-          // First Save on a low working set reveals the warning so the strength checkbox can be used.
-          holdSaveForLowRepWarning = ()=>{
-            clearTimeout(blurTimer);
-            if(!repsInput) return false;
-            repsCommitted = String(repsInput.value).trim() !== '';
-            const reps = parseInt(repsInput.value, 10);
-            const show = isLowRepSet({reps, isWarmup}, metric);
-            const already = !!q('[data-intent]', warnBox);
-            refreshWarning();
-            return show && !already;
-          };
-          if(repsInput){
-            repsInput.addEventListener('input', ()=>{
-              repsCommitted = false;
-              clearTimeout(blurTimer);
-              warnBox.innerHTML = '';
-            });
-            repsInput.addEventListener('blur', ()=>{
-              repsCommitted = String(repsInput.value).trim() !== '';
-              clearTimeout(blurTimer);
-              // After the click handler, so Save can show the warning itself.
-              blurTimer = setTimeout(refreshWarning, 0);
-            });
-            repsInput.addEventListener('keydown', (e)=>{
-              if(e.key !== 'Enter') return;
-              repsCommitted = String(repsInput.value).trim() !== '';
-              clearTimeout(blurTimer);
-              refreshWarning();
-            });
-            if(repsCommitted) refreshWarning();
-          }
-        } else {
-          const dropWrap = el(`
-            <div>
-              <p class="faint small" style="margin-bottom:8px;">Log each stage as the weight drops (2-5 stages).</p>
-              <div data-stages></div>
-              <div class="row" style="margin-bottom:12px;">
-                <button class="btn ghost" data-add-stage ${stages.length>=5?'disabled':''}>＋ Add stage</button>
-                <button class="btn ghost" data-remove-stage ${stages.length<=2?'disabled':''}>－ Remove stage</button>
-              </div>
-            </div>`);
-          fieldsBox.appendChild(dropWrap);
-          const stagesBox = q('[data-stages]',dropWrap);
-          stages.forEach((stage,i)=>{
-            stagesBox.appendChild(el(`
-              <div class="stage-row">
-                <span class="stage-num">${i+1}</span>
-                <div class="fields" style="display:flex;gap:8px;flex:1;">${stageFieldsHtml(metric, stage, i, ex)}</div>
-              </div>`));
-          });
-          const captureStages = ()=>{ stages = stages.map((s,i)=> readStageFields(metric, wrap, i, ex) || s); };
-          q('[data-add-stage]',dropWrap).onclick = ()=>{
-            if(stages.length>=5) return;
-            captureStages();
-            stages.push(defaultDropStages(metric,null)[0]);
-            renderBody();
-          };
-          q('[data-remove-stage]',dropWrap).onclick = ()=>{
-            if(stages.length<=2) return;
-            captureStages();
-            stages.pop();
-            renderBody();
-          };
-        }
-
-        const paintEffort = ()=> qa('.diffchip',wrap).forEach(chip=>{
-          chip.className = chip.dataset.effortKey===effort ? 'diffchip on-'+effort : 'diffchip';
-        });
-        paintEffort();
-        qa('.diffchip',wrap).forEach(chip=> chip.onclick = ()=>{ effort = chip.dataset.effortKey; paintEffort(); });
-        const wu = q('[data-warmup]',wrap);
-        if(wu) wu.onchange = (e)=>{ isWarmup = e.target.checked; refreshLowRepWarning(); };
-
-        q('[data-save]',wrap).onclick = ()=>{
-          if(mode==='normal'){
-            if(holdSaveForLowRepWarning()) return;
-            const values = readMetricFields(metric, wrap, '', ex);
-            if(!values){ showToast('Enter valid numbers'); return; }
-            const intent = !isWarmup && hasLoadField(metric) && strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
-            saveNormalSet(values, intent);
-          } else {
-            const finalStages = [];
-            for(let i=0;i<stages.length;i++){
-              const v = readStageFields(metric, wrap, i, ex);
-              if(!v){ showToast(`Enter valid numbers for stage ${i+1}`); return; }
-              finalStages.push(v);
-            }
-            if(finalStages.length<2){ showToast('Add at least 2 stages'); return; }
-            saveDropSet(finalStages);
-          }
-        };
-      }
-      renderBody();
-    }
-  });
-}
-
-/* One sheet for a whole superset round: every exercise, then one rest. */
-function supersetSeed(planRow){
-  const metric = metricOf(getExercise(planRow.exerciseId));
-  const done = setsInLogFor(todayLog(), planRow.exerciseId).filter(s=>!s.isDropSet);
-  const lastToday = done.slice(-1)[0];
-  const lastBits = lastLoggedBits(planRow.exerciseId);
-  const sample = lastToday || (lastBits && lastBits.set);
-  const planned = loadPlanFor(planRow.exerciseId);
-  const seed = {weight:'', reps:'', duration:''};
-  if(hasLoadField(metric)){
-    const weight = planned && planned.weight!=null ? planned.weight : (sample && sample.weight!=null ? sample.weight : '');
-    seed.weight = weight;
-    seed.reps = sample && sample.reps!=null ? sample.reps : '';
-  } else if(metric==='reps_only'){
-    seed.reps = sample && sample.reps!=null ? sample.reps : '';
-  } else if(metric==='time'){
-    seed.duration = sample && sample.duration!=null ? sample.duration : '';
-  }
-  return seed;
-}
-function openSupersetLogSheet(members){
-  const blocks = members.map((m,i)=>{
-    const ex = getExercise(m.row.exerciseId);
-    if(!ex) return null;
-    return {row:m.row, ex, metric:metricOf(ex), prefix:'r'+i, effort:'med', strengthIntent:false, warned:false};
-  }).filter(Boolean);
-  if(blocks.length<2) return;
-  let warmup = false;
-
-  openSheet({
-    title:'Log superset round',
-    build:(body)=>{
-      function paintEffort(blockEl, effort){
-        qa('.diffchip', blockEl).forEach(chip=>{
-          chip.className = chip.dataset.effortKey===effort ? 'diffchip on-'+effort : 'diffchip';
-        });
-      }
-      function showLowRep(block, blockEl){
-        const warnBox = q('[data-warn]', blockEl);
-        warnBox.innerHTML = '';
-        const node = el(`
-          <div class="warn-box">
-            ⚠️ Very low rep set (under ${TRAINING.lowRepWarningBelow}). That's strength territory — drop the weight if you're chasing size.
-            <label class="pick"><input type="checkbox" data-intent ${block.strengthIntent?'checked':''}> Count this as a strength set</label>
-          </div>`);
-        q('[data-intent]', node).onchange = (e)=>{ block.strengthIntent = e.target.checked; };
-        warnBox.appendChild(node);
-      }
-      const wrap = el(`
-        <div>
-          <p class="faint small" style="margin-bottom:12px;">Log every exercise in this round here. Rest once after you save.</p>
-          <div data-blocks></div>
-          <label class="row" style="gap:8px;margin:4px 0 0;font-size:13px;color:var(--text-dim);cursor:pointer;">
-            <input type="checkbox" data-warmup style="width:auto;">
-            <span>Warm-up round (skipped for PRs, overload, and auto-finish)</span>
-          </label>
-          <button class="btn" data-save style="width:100%;margin-top:12px;">Save round</button>
-        </div>`);
-      body.appendChild(wrap);
-      const list = q('[data-blocks]', wrap);
-      blocks.forEach(block=>{
-        const target = isTreadmill(block.ex)
-          ? 'by feel'
-          : isMinuteHold(block.ex)
-          ? formatHoldRange(block.row.repsMin, block.row.repsMax)
-          : block.metric!=='time'
-          ? `${formatRepRange(block.row.repsMin, block.row.repsMax)} reps${block.row.rpe?` · RPE ${block.row.rpe}`:''}`
-          : `${block.row.sets} holds`;
-        const blockEl = el(`
-          <div class="ss-block" data-block="${block.prefix}">
-            <div class="name">${escapeHtml(block.ex.name)}</div>
-            <p class="faint small" style="margin-bottom:8px;">${escapeHtml(target)}</p>
-            ${metricFieldsHtml(block.metric, supersetSeed(block.row), null, block.prefix, block.ex)}
-            <div data-warn></div>
-            <div class="field" style="margin-bottom:0;">
-              <label>How hard?</label>
-              <div class="row">
-                <div class="diffchip" data-effort-key="easy">Easy</div>
-                <div class="diffchip" data-effort-key="med">Medium</div>
-                <div class="diffchip" data-effort-key="hard">Hard</div>
-              </div>
-            </div>
-          </div>`);
-        paintEffort(blockEl, block.effort);
-        qa('.diffchip', blockEl).forEach(chip=> chip.onclick = ()=>{
-          block.effort = chip.dataset.effortKey;
-          paintEffort(blockEl, block.effort);
-        });
-        const repsInput = q('#'+metricFieldId(block.prefix,'fldReps'), blockEl);
-        if(repsInput) repsInput.addEventListener('input', ()=>{
-          block.warned = false;
-          block.strengthIntent = false;
-          q('[data-warn]', blockEl).innerHTML = '';
-        });
-        list.appendChild(blockEl);
-      });
-      q('[data-warmup]', wrap).onchange = (e)=>{
-        warmup = e.target.checked;
-        if(warmup) blocks.forEach(block=>{
-          block.warned = false;
-          block.strengthIntent = false;
-          const blockEl = q(`[data-block="${block.prefix}"]`, wrap);
-          if(blockEl) q('[data-warn]', blockEl).innerHTML = '';
-        });
-      };
-      q('[data-save]', wrap).onclick = ()=>{
-        const pending = [];
-        for(const block of blocks){
-          const values = readMetricFields(block.metric, wrap, block.prefix, block.ex);
-          if(!values){ showToast('Enter valid numbers for '+block.ex.name); return; }
-          pending.push({block, values});
-        }
-        let held = false;
-        pending.forEach(({block, values})=>{
-          const low = isLowRepSet({reps:values.reps, isWarmup:warmup}, block.metric);
-          if(!low){ block.warned = false; block.strengthIntent = false; return; }
-          if(block.warned) return;
-          block.warned = true;
-          held = true;
-          showLowRep(block, q(`[data-block="${block.prefix}"]`, wrap));
-        });
-        if(held) return;
-        const log = todayLog();
-        persistLog(log);
-        clearRunningHolds();
-        const saved = pending.map(({block, values})=>{
-          const intent = !warmup && hasLoadField(block.metric) && block.strengthIntent && values.reps < TRAINING.lowRepWarningBelow ? 'strength' : null;
-          const set = {id:uid(), exerciseId:block.row.exerciseId, difficulty:block.effort, intent, ts:Date.now(), isPR:false, isDropSet:false, isWarmup:warmup, ...values};
-          log.sets.push(set);
-          recomputePRs(block.row.exerciseId);
-          return set;
-        });
-        saved.forEach(s=> promoteStartedExercise(log, s.exerciseId));
-        markWorkoutActivity(log);
-        saveData(DATA);
-        closeSheets();
-        const holding = startHoldIfMinute(saved);
-        if(holding) hapticTick(false);
-        const ready = holding ? saved.filter(s=> typeof s.holdStartedAt!=='number') : saved;
-        if(ready.length) celebrateSets(ready);
-        renderApp();
-      };
-    }
-  });
 }
 
 /* --- adjust today's target load -------------------------------------- */
@@ -770,6 +338,7 @@ function deleteExerciseFromLibrary(ex){
     });
     Object.values(DATA.splits).forEach(stripSplit);
     (DATA.presets||[]).forEach(p=> stripSplit(p.split));
+    (DATA.sessions||[]).forEach(s=>{ if(s) s.exercises = strip(s.exercises); });
     DATA.logs.forEach(log=>{
       if(Array.isArray(log.plan)) log.plan = strip(log.plan);
       if(Array.isArray(log.queued)) log.queued = strip(log.queued);
@@ -848,8 +417,12 @@ function openAlternativesSheet(opts){
   });
 }
 
-/* Swap today's hit list to another split day, or an empty custom session. */
+/* Swap today's hit list to another split day, a saved session, or empty custom. */
 function todaySessionLabel(kind, dayKey){
+  if(kind==='session'){
+    const session = getSession(dayKey);
+    return (session && session.name) || 'Session';
+  }
   if(kind==='custom') return 'Custom';
   const key = kind==='scheduled' ? weekdayKey() : dayKey;
   const day = splitDayFor(key);
@@ -869,39 +442,77 @@ function pickTodaySession(kind, dayKey, sheet){
   }
   go();
 }
+function isCurrentTodaySession(log, kind, key){
+  const usual = weekdayKey();
+  if(kind==='scheduled') return !log.customSession && (log.dayKey||usual)===usual;
+  if(kind==='day') return !log.customSession && log.dayKey===key;
+  if(kind==='session') return !!log.customSession && log.sessionId===key;
+  if(kind==='custom') return !!log.customSession && !log.sessionId;
+  return false;
+}
 function openTodaySessionSheet(){
   const log = todayLog();
   const usual = weekdayKey();
-  const onCustom = !!log.customSession;
-  const overridden = onCustom || (!!log.dayKey && log.dayKey!==usual);
   openSheet({
     title:'Want to do something else?',
     build:(body, sheet)=>{
       const list = el(`<div class="choice-list"></div>`);
-      const add = (title, sub, kind, dayKey)=>{
+      const add = (title, sub, kind, key, opts)=>{
+        opts = opts || {};
+        const on = isCurrentTodaySession(log, kind, key);
+        const item = el(`<div class="choice-item"></div>`);
         const row = el(`
-          <button type="button" class="choice-row">
+          <button type="button" class="choice-row${on?' on':''}" role="option" aria-selected="${on}">
             <span class="choice-row-label">${escapeHtml(title)}<span class="choice-row-sub">${escapeHtml(sub)}</span></span>
+            <span class="choice-row-check" aria-hidden="true">${on ? icon('check',18) : ''}</span>
           </button>`);
-        row.onclick = ()=> pickTodaySession(kind, dayKey, sheet);
-        list.appendChild(row);
+        row.onclick = ()=>{
+          if(on){ sheet.close(); return; }
+          if(opts.onPick){ opts.onPick(); return; }
+          pickTodaySession(kind, key, sheet);
+        };
+        item.appendChild(row);
+        if(opts.onGear){
+          const gear = el(`<button type="button" class="choice-gear plan-gear" title="Edit" aria-label="Edit">${icon('settings',16)}</button>`);
+          gear.onclick = (e)=>{ e.stopPropagation(); opts.onGear(); };
+          item.appendChild(gear);
+        }
+        list.appendChild(item);
       };
-      if(overridden){
-        const day = splitDayFor(usual);
-        const n = (day.exercises||[]).length;
-        const sub = n
-          ? `${day.name || 'Workout'} · ${n} exercise${n===1?'':'s'} · today's usual day`
-          : `${day.name || 'Rest'} · today's usual day`;
-        add(DAY_LABELS[usual], sub, 'scheduled', usual);
-      }
-      DAY_ORDER.forEach(dk=>{
-        if(dk===usual) return;
-        if(!onCustom && dk===(log.dayKey||usual)) return;
+
+      const daySub = (dk, extra)=>{
         const day = splitDayFor(dk);
         const n = (day.exercises||[]).length;
-        add(DAY_LABELS[dk], n ? `${day.name || 'Workout'} · ${n} exercise${n===1?'':'s'}` : 'Rest', 'day', dk);
+        const base = n
+          ? `${day.name || 'Workout'} · ${n} exercise${n===1?'':'s'}`
+          : `${day.name || 'Rest'}`;
+        return extra ? `${base} · ${extra}` : base;
+      };
+      add(DAY_LABELS[usual], daySub(usual, 'today\'s usual day'), 'scheduled', usual, {
+        onGear:()=> openDayEditor(usual)
       });
-      if(!onCustom) add('Custom', 'Start empty and add exercises', 'custom', null);
+      DAY_ORDER.forEach(dk=>{
+        if(dk===usual) return;
+        add(DAY_LABELS[dk], daySub(dk), 'day', dk, {
+          onGear:()=> openDayEditor(dk)
+        });
+      });
+
+      list.appendChild(el(`<div class="choice-section">Sessions</div>`));
+      const sessions = Array.isArray(DATA.sessions) ? DATA.sessions.slice() : [];
+      sessions.forEach(session=>{
+        if(!session || !session.id) return;
+        const n = (session.exercises||[]).length;
+        const sub = n ? `${n} exercise${n===1?'':'s'}` : 'No exercises yet';
+        add(session.name || 'Session', sub, 'session', session.id, {
+          onGear:()=> openSessionEditor(session.id)
+        });
+      });
+      add('+ New session', 'Name it and save a list you can pick later', 'new', null, {
+        onPick:()=> openSessionEditor(null)
+      });
+      add('Start empty', 'Add exercises as you go', 'custom', null);
+
       body.appendChild(list);
     }
   });
@@ -1297,24 +908,28 @@ function openEditPresetSheet(presetId){
   });
 }
 
-/* Draft-based editor: nothing is written to DATA until "Save day". */
-function openDayEditor(dayKey, focusExerciseId){
-  const splitKey = DATA.activeSplit;
-  let draft = clone(splitDays()[dayKey]);
+/* Shared draft editor for a split day or a saved session.
+   Nothing is written until Save. cfg: title, draft, nameLabel,
+   namePlaceholder, liveNote, showCopy, onCopy, saveLabel, emptyText,
+   addTitle, newRow, editRow, onSave, onDelete?, discardKind, focusExerciseId. */
+function openPlanListEditor(cfg){
+  let draft = cfg.draft;
   if(!Array.isArray(draft.exercises)) draft.exercises = [];
   if(!Array.isArray(draft.warmups)) draft.warmups = [];
   let dirty = false;
-  let selected = new Set(); // indices picked for "group into superset" — editor-only, not persisted
-  let openIdx = -1;         // the one expanded exercise row — editor-only
-  if(focusExerciseId){
-    const at = draft.exercises.findIndex(r=>r.exerciseId===focusExerciseId);
+  let selected = new Set();
+  let openIdx = -1;
+  if(cfg.focusExerciseId){
+    const at = draft.exercises.findIndex(r=>r.exerciseId===cfg.focusExerciseId);
     if(at>=0) openIdx = at;
   }
-  let openWuIdx = -1;       // the one expanded warm-up row — editor-only
+  let openWuIdx = -1;
   let editorScroll = 0;
+  const discardKind = cfg.discardKind || 'this day';
+  const saveLabel = cfg.saveLabel || 'Save day';
 
   const discard = ()=>{ closeSheets(); renderApp(); };
-  const guard = ()=> dirty ? confirmAction('Discard unsaved changes to this day?', 'Discard', discard) : discard();
+  const guard = ()=> dirty ? confirmAction(`Discard unsaved changes to ${discardKind}?`, 'Discard', discard) : discard();
   const remapSelected = (mapper)=>{
     selected = new Set([...selected].map(mapper).filter(i=>i>=0 && i<draft.exercises.length));
     if(openIdx>=0){
@@ -1325,21 +940,19 @@ function openDayEditor(dayKey, focusExerciseId){
 
   function draw(){
     openSheet({
-      title: DAY_LABELS[dayKey],
+      title: cfg.title,
       startFull: true,
       onRequestClose: guard,
       build:(body, sheet)=>{
-        const liveWorkout = activeWorkoutLog();
-        const editingLiveDay = !!(liveWorkout && liveWorkout.dayKey===dayKey);
-        const presetLabel = (currentPreset()||{}).name || 'this preset';
         const wuMins = warmupsMinutes(draft.warmups);
+        const liveNote = typeof cfg.liveNote==='function' ? cfg.liveNote() : cfg.liveNote;
         body.appendChild(el(`
           <div class="day-editor">
-            <div class="field day-name"><label>Day name</label><input id="dayName" value="${escapeHtml(draft.name)}" placeholder="e.g. Push, Pull, Rest"></div>
-            ${editingLiveDay ? `<p class="day-live">This workout is already going. Saving updates ${escapeHtml(presetLabel)} and today’s workout.</p>` : ''}
+            <div class="field day-name"><label>${escapeHtml(cfg.nameLabel||'Day name')}</label><input id="dayName" value="${escapeHtml(draft.name||'')}" placeholder="${escapeHtml(cfg.namePlaceholder||'')}"></div>
+            ${liveNote ? `<p class="day-live">${liveNote}</p>` : ''}
             <div class="day-editor-bar">
               <span class="day-count">Exercises <span class="count-pill">${draft.exercises.length}</span></span>
-              <button class="btn ghost day-copy" data-copy>${icon('copy',16)} Copy day</button>
+              ${cfg.showCopy ? `<button class="btn ghost day-copy" data-copy>${icon('copy',16)} Copy day</button>` : ''}
             </div>
             <p class="day-hint">Tick 2–4 boxes to group a superset. Tap a row to replace it or move it. The gear opens sets and time for that movement.</p>
             <div data-group-bar></div>
@@ -1358,9 +971,10 @@ function openDayEditor(dayKey, focusExerciseId){
             </div>
             <div class="day-editor-actions">
               <div class="day-action-row">
-                <button class="btn day-save" data-save>${icon('check',16)} Save day</button>
+                <button class="btn day-save" data-save>${icon('check',16)} ${escapeHtml(saveLabel)}</button>
               </div>
-              <p class="day-foot">Nothing is saved until you tap Save day.</p>
+              ${cfg.onDelete ? `<div class="day-action-row" style="margin-top:8px;"><button class="btn danger" data-delete style="width:100%;">Delete session</button></div>` : ''}
+              <p class="day-foot">Nothing is saved until you tap ${escapeHtml(saveLabel)}.</p>
             </div>
           </div>`));
         q('#dayName',body).oninput = (e)=>{ draft.name = e.target.value; dirty = true; };
@@ -1383,10 +997,10 @@ function openDayEditor(dayKey, focusExerciseId){
         }
 
         const rowsBox = q('[data-rows]',body);
-        if(!draft.exercises.length) rowsBox.appendChild(el(`<p class="empty">Rest day — no exercises yet. Add one below, or leave it empty.</p>`));
+        if(!draft.exercises.length) rowsBox.appendChild(el(`<p class="empty">${escapeHtml(cfg.emptyText||'No exercises yet. Add one below, or leave it empty.')}</p>`));
+        const redraw = ()=>{ dirty = true; draw(); };
         const ctx = {
-          dayKey,
-          redraw:()=>{ dirty = true; draw(); },
+          redraw,
           markDirty:()=>{ dirty = true; },
           selected,
           remapSelected,
@@ -1400,7 +1014,8 @@ function openDayEditor(dayKey, focusExerciseId){
             const remaining = draft.exercises.filter(r=>r.supersetId===gid);
             if(remaining.length<2) remaining.forEach(r=>r.supersetId=null);
             dirty = true; draw();
-          }
+          },
+          editRow:(row)=> cfg.editRow(row, redraw)
         };
         groupPlanRows(draft.exercises).forEach(g=>{
           if(g.type==='single'){
@@ -1429,10 +1044,10 @@ function openDayEditor(dayKey, focusExerciseId){
         draft.warmups.forEach((row, idx)=> wuBox.appendChild(warmupRowEditor(row, idx, draft, wuCtx)));
 
         q('[data-add]',body).onclick = ()=> openExercisePicker({
-          title:`Add to ${DAY_LABELS[dayKey]}`,
+          title: cfg.addTitle || 'Add exercise',
           exclude: draft.exercises.map(r=>r.exerciseId),
-            onPick:(id)=>{
-            draft.exercises.push(planRowForNewExercise(id,{goal:DATA.settings.goal, dayKey}));
+          onPick:(id)=>{
+            draft.exercises.push(cfg.newRow(id));
             openIdx = draft.exercises.length-1;
             dirty = true; draw();
           }
@@ -1457,18 +1072,14 @@ function openDayEditor(dayKey, focusExerciseId){
             confirmAction('Reset warm-ups to everyday bodyweight basics? Your current list will be replaced.', 'Reset', apply);
           else apply();
         };
-        q('[data-copy]',body).onclick = ()=> openCopyDaySheet(dayKey, draft, draw);
+        const copyBtn = q('[data-copy]',body);
+        if(copyBtn && cfg.onCopy) copyBtn.onclick = ()=> cfg.onCopy(draft, draw);
         q('[data-save]',body).onclick = ()=>{
           draft.warmups = (draft.warmups||[]).map(normalizeWarmupRow).filter(Boolean);
-          DATA.splits[splitKey].days[dayKey] = draft;
-          touchActivePreset();
-          const refreshed = splitKey===DATA.activeSplit && syncActiveWorkoutFromSplit({dayKey, fromSave:true});
-          saveData(DATA);
-          closeSheets();
-          const live = refreshed && activeWorkoutLog();
-          showToast(live ? 'Saved. Today’s workout updated.' : refreshed ? 'Saved. Today’s hit list updated.' : 'Day saved');
-          renderApp();
+          cfg.onSave(draft);
         };
+        const delBtn = q('[data-delete]',body);
+        if(delBtn && cfg.onDelete) delBtn.onclick = ()=> cfg.onDelete(draft);
         const modal = q('.modal', sheet.node);
         if(modal){
           modal.classList.add('day-sheet');
@@ -1480,76 +1091,144 @@ function openDayEditor(dayKey, focusExerciseId){
   }
   draw();
 }
-/* Sets and time for an exercise that is only in today's workout. */
-function openSessionPlanSheet(log, planRow){
-  const ex = getExercise(planRow.exerciseId);
-  const metric = metricOf(ex);
-  const walk = isTreadmill(ex);
-  const minute = isMinuteHold(ex) && !walk;
-  const dayKey = log.dayKey || weekdayKey();
-  const dayLabel = DAY_LABELS[dayKey] || 'this day';
+/* Draft-based editor: nothing is written to DATA until "Save day". */
+function openDayEditor(dayKey, focusExerciseId){
+  const splitKey = DATA.activeSplit;
+  const draft = clone(splitDays()[dayKey]);
+  openPlanListEditor({
+    title: DAY_LABELS[dayKey],
+    draft,
+    nameLabel:'Day name',
+    namePlaceholder:'e.g. Push, Pull, Rest',
+    discardKind:'this day',
+    focusExerciseId,
+    liveNote:()=>{
+      const liveWorkout = activeWorkoutLog();
+      if(!(liveWorkout && !liveWorkout.customSession && liveWorkout.dayKey===dayKey)) return '';
+      const presetLabel = (currentPreset()||{}).name || 'this preset';
+      return `This workout is already going. Saving updates ${escapeHtml(presetLabel)} and today’s workout.`;
+    },
+    showCopy:true,
+    onCopy:(d, draw)=> openCopyDaySheet(dayKey, d, draw),
+    saveLabel:'Save day',
+    emptyText:'Rest day — no exercises yet. Add one below, or leave it empty.',
+    addTitle:`Add to ${DAY_LABELS[dayKey]}`,
+    newRow:(id)=> planRowForNewExercise(id,{goal:DATA.settings.goal, dayKey}),
+    editRow:(row, redraw)=>{
+      openExercisePlanSheet(row.exerciseId, {
+        /* The gear sheet takes the editor's place; closing it brings the unsaved day back. */
+        onClosed: redraw,
+        onSaved:()=>{
+          const liveRows = (splitDays()[dayKey]||{}).exercises || [];
+          draft.exercises.forEach((r,i)=>{
+            if(!r || r.exerciseId!==row.exerciseId) return;
+            const src = (liveRows[i] && liveRows[i].exerciseId===r.exerciseId)
+              ? liveRows[i]
+              : liveRows.find(x=>x && x.exerciseId===r.exerciseId);
+            if(src) applyPlanFieldsToRow(r, planFieldsSnapshot(src));
+          });
+          renderApp();
+          redraw();
+        }
+      });
+    },
+    onSave:(d)=>{
+      DATA.splits[splitKey].days[dayKey] = d;
+      touchActivePreset();
+      const refreshed = splitKey===DATA.activeSplit && syncActiveWorkoutFromSplit({dayKey, fromSave:true});
+      saveData(DATA);
+      closeSheets();
+      const live = refreshed && activeWorkoutLog();
+      showToast(live ? 'Saved. Today’s workout updated.' : refreshed ? 'Saved. Today’s hit list updated.' : 'Day saved');
+      renderApp();
+    }
+  });
+}
+/* Sets and time for one row on a saved session (not the split or library default). */
+function openSessionRowSheet(row, onSaved){
+  const ex = getExercise(row.exerciseId);
+  if(!ex) return;
   openSheet({
-    title: ex ? ex.name : 'Exercise',
+    root:SHEET_ROOT.picker, zIndex:150,
+    title: ex.name,
     build:(body, sheet)=>{
       body.appendChild(el(`
         <div class="session-plan">
-          <p class="faint small" style="margin-top:0;">Only in today’s workout. Your split stays as it is until you add it.${walk ? ' Walk as long as you like — there is no planned time.' : ''}</p>
-          <div class="plan-metrics${minute?' hold session-hold':walk?' walk':''}">
-            <div><label>Sets</label><input type="number" min="1" inputmode="numeric" value="${planRow.sets}" data-field="sets"></div>
-            ${minute ? `
-            <div><label>Rest (sec)</label><input type="number" min="0" inputmode="numeric" value="${planRow.restSeconds!=null?planRow.restSeconds:''}" data-field="restSeconds" placeholder="${defaultRestSeconds()}"></div>
-            <div class="plan-hold"><label>Min hold</label>${holdFieldsHtml(planRow.repsMin, {minAttr:'data-hold-field="repsMin" data-hold-part="min"', secAttr:'data-hold-field="repsMin" data-hold-part="sec"'})}</div>
-            <div class="plan-hold"><label>Max hold</label>${holdFieldsHtml(planRow.repsMax, {minAttr:'data-hold-field="repsMax" data-hold-part="min"', secAttr:'data-hold-field="repsMax" data-hold-part="sec"'})}</div>`
-            : walk ? `
-            <div><label>Rest (sec)</label><input type="number" min="0" inputmode="numeric" value="${planRow.restSeconds!=null?planRow.restSeconds:''}" data-field="restSeconds" placeholder="${defaultRestSeconds()}"></div>`
-            : `<div><label>${metric==='time'?'Min sec':'Min reps'}</label><input type="number" min="1" inputmode="numeric" value="${planRow.repsMin}" data-field="repsMin"></div>
-            <div><label>${metric==='time'?'Max sec':'Max reps'}</label><input type="number" min="1" inputmode="numeric" value="${planRow.repsMax}" data-field="repsMax"></div>
-            <div><label>Rest (sec)</label><input type="number" min="0" inputmode="numeric" value="${planRow.restSeconds!=null?planRow.restSeconds:''}" data-field="restSeconds" placeholder="${defaultRestSeconds()}"></div>`}
-          </div>
-          <div class="field" style="margin-top:12px;"><label>Note</label><input data-field="notes" value="${escapeHtml(planRow.notes||'')}" placeholder="e.g. easy incline"></div>
+          <p class="faint small" style="margin-top:0;">Only this session. Your split and the library default stay as they are.${isTreadmill(ex)?' Walk as long as you like — there is no planned time.':''}</p>
+          <div data-fields></div>
           <button class="btn" data-save style="width:100%;margin-top:14px;">Save</button>
-          <button class="btn secondary" data-add-split style="width:100%;margin-top:8px;">Add to ${escapeHtml(dayLabel)} split</button>
         </div>`));
-      const read = ()=>{
-        const sets = parseInt(q('[data-field="sets"]', body).value, 10);
-        if(!isNaN(sets) && sets>=1) planRow.sets = sets;
-        if(minute){
-          ['repsMin','repsMax'].forEach(field=>{
-            const minEl = q(`input[data-hold-field="${field}"][data-hold-part="min"]`, body);
-            const secEl = q(`input[data-hold-field="${field}"][data-hold-part="sec"]`, body);
-            const got = readHoldFields(minEl, secEl);
-            if(got) planRow[field] = got.duration;
-          });
-        } else if(!walk){
-          ['repsMin','repsMax'].forEach(field=>{
-            const n = parseInt(q(`[data-field="${field}"]`, body).value, 10);
-            if(!isNaN(n) && n>=1) planRow[field] = n;
-          });
-        }
-        if(!walk && planRow.repsMin>planRow.repsMax){
-          const swap = planRow.repsMin;
-          planRow.repsMin = planRow.repsMax;
-          planRow.repsMax = swap;
-        }
-        const restEl = q('[data-field="restSeconds"]', body);
-        const restRaw = (restEl.value||'').trim();
-        planRow.restSeconds = restRaw==='' ? null : Math.max(0, parseInt(restRaw, 10)||0);
-        planRow.notes = q('[data-field="notes"]', body).value;
-        if(typeof spotterForget==='function') spotterForget(planRow.exerciseId);
-      };
+      const fields = q('[data-fields]', body);
+      fields.innerHTML = planEditorFieldsHtml(row, ex, {prefix:'ses'});
+      bindPlanEditorEquipment(fields, {prefix:'ses'});
       q('[data-save]', body).onclick = ()=>{
-        read();
-        saveData(DATA);
+        applyPlanFieldsToRow(row, readPlanEditorFields(fields, ex, {prefix:'ses'}));
+        if(typeof spotterForget==='function') spotterForget(row.exerciseId);
         sheet.close();
-        showToast('Saved for today');
+        if(onSaved) onSaved();
+        else showToast('Saved');
+      };
+    }
+  });
+}
+function openSessionEditor(sessionId){
+  const existing = sessionId ? getSession(sessionId) : null;
+  const isNew = !existing;
+  const draft = existing
+    ? {name:existing.name||'Session', exercises:clone(existing.exercises||[]), warmups:Array.isArray(existing.warmups) ? clone(existing.warmups) : warmupsForSession(existing)}
+    : {name:'New session', exercises:[], warmups:[]};
+  const liveNote = ()=>{
+    const log = todayLog();
+    if(!(log.customSession && log.sessionId && existing && log.sessionId===existing.id)) return '';
+    return 'This is today’s workout. Saving updates it too.';
+  };
+  openPlanListEditor({
+    title: existing ? (existing.name || 'Session') : 'New session',
+    draft,
+    nameLabel:'Session name',
+    namePlaceholder:'e.g. Full Body, Quick Upper',
+    discardKind:'this session',
+    liveNote,
+    showCopy:false,
+    saveLabel:'Save session',
+    emptyText:'No exercises yet. Add one below, or leave it empty.',
+    addTitle:'Add to session',
+    newRow:(id)=> planRowForNewExercise(id,{goal:DATA.settings.goal}),
+    editRow:(row, redraw)=> openSessionRowSheet(row, redraw),
+    onSave:(d)=>{
+      const name = (d.name||'').trim() || 'Session';
+      d.name = name;
+      d.warmups = (d.warmups||[]).map(normalizeWarmupRow).filter(Boolean);
+      d.exercises = (d.exercises||[]).filter(r=>r && r.exerciseId);
+      if(isNew){
+        const saved = {id:uid(), name, exercises:d.exercises, warmups:d.warmups};
+        DATA.sessions = Array.isArray(DATA.sessions) ? DATA.sessions : [];
+        DATA.sessions.push(saved);
+        saveData(DATA);
+        closeSheets();
+        showToast('Session saved');
         renderApp();
-      };
-      q('[data-add-split]', body).onclick = ()=>{
-        read();
+        return;
+      }
+      existing.name = name;
+      existing.exercises = d.exercises;
+      existing.warmups = d.warmups;
+      const refreshed = syncTodayFromSession(existing.id);
+      saveData(DATA);
+      closeSheets();
+      showToast(refreshed ? 'Saved. Today’s workout updated.' : 'Session saved');
+      renderApp();
+    },
+    onDelete: isNew ? null : ()=>{
+      const name = (existing.name||'this session');
+      confirmAction(`Delete ${name}? It leaves Something else?. Today’s list stays if you already picked it.`, 'Delete', ()=>{
+        dismissBuiltinSession(existing);
+        DATA.sessions = (DATA.sessions||[]).filter(s=>s && s.id!==existing.id);
         saveData(DATA);
-        sheet.close();
-        commitExerciseToSplit(log, planRow.exerciseId);
-      };
+        closeSheets();
+        showToast('Session deleted');
+        renderApp();
+      });
     }
   });
 }
@@ -2092,21 +1771,7 @@ function planRowEditor(row, idx, draft, ctx, opts){
   if(ungroupOneBtn) ungroupOneBtn.onclick = ()=> ctx.removeFromGroup(idx);
   q('[data-edit-plan]',node).onclick = (e)=>{
     e.stopPropagation();
-    const dayKey = ctx.dayKey;
-    openExercisePlanSheet(row.exerciseId, {
-      onSaved:()=>{
-        const liveRows = (splitDays()[dayKey]||{}).exercises || [];
-        draft.exercises.forEach((r,i)=>{
-          if(!r || r.exerciseId!==row.exerciseId) return;
-          const src = (liveRows[i] && liveRows[i].exerciseId===r.exerciseId)
-            ? liveRows[i]
-            : liveRows.find(x=>x && x.exerciseId===r.exerciseId);
-          if(src) applyPlanFieldsToRow(r, planFieldsSnapshot(src));
-        });
-        renderApp();
-        ctx.redraw();
-      }
-    });
+    if(typeof ctx.editRow==='function') ctx.editRow(row);
   };
 
   const swapRows = (a,b)=>{
@@ -2177,8 +1842,6 @@ function openCopyDaySheet(sourceKey, draft, onDone){
 }
 
 /* ------------------------------ Library ------------------------------ */
-/* Exercise library lives on Settings → Edit exercises. */
-function openLibrarySheet(){ openEditExercisesScreen(); }
 function addMissingBox(term, label, redraw){
   const box = el(`
     <div class="notfound">
@@ -2421,7 +2084,7 @@ function openWarmupFormSheet(opts){
         confirmAction('Delete this warm-up from your library?', 'Delete', ()=>{
           DATA.warmupLibrary = (DATA.warmupLibrary||[]).filter(w=>w.id!==item.id);
           saveData(DATA);
-          sheet.close();
+          closeSheets();
           showToast('Warm-up deleted');
           renderApp();
         });
@@ -2541,6 +2204,7 @@ function sessionChipText(sets, metric, ex){
   return `${value}${units()} assist`;
 }
 
+let exerciseDetailChart = null;
 function openExerciseDetailSheet(exerciseId, opts){
   opts = opts || {};
   const ex = getExercise(exerciseId);
@@ -2622,7 +2286,8 @@ function openExerciseDetailSheet(exerciseId, opts){
           : metric==='weighted_bw' ? `Estimated 1RM incl. bodyweight (${units()})`
           : metric==='reps_only' ? 'Best reps' : metric==='time' ? (minute ? 'Best hold (min)' : 'Best hold (s)') : `Assistance used (${units()})`;
         const chartValue = v=> (minute && metric==='time' && v!=null) ? roundTo(v/60, 2) : v;
-        new Chart(canvas.getContext('2d'), {
+        if(exerciseDetailChart) exerciseDetailChart.destroy();
+        exerciseDetailChart = new Chart(canvas.getContext('2d'), {
           type:'line',
           data:{ labels: ordered.map(s=>s.date.slice(5)),
                  datasets:[{label:axisLabel, data: ordered.map(s=>chartValue(sessionBestValue(s.sets, metric))),
@@ -2646,11 +2311,53 @@ function clearStatsMuscle(){
   recordsMuscleList = null;
   recordsMuscleSlug = null;
 }
+function syncStatsMapSel(){
+  const mapCard = q('.stats-map-card');
+  if(!mapCard) return;
+  qa('.bm-m[data-slug]', mapCard).forEach(path=>{
+    const on = !!(recordsMuscleSlug && path.getAttribute('data-slug')===recordsMuscleSlug);
+    path.classList.toggle('sel', on);
+    if(path.hasAttribute('aria-pressed')) path.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+function bindStatsDetail(detail){
+  if(!detail) return;
+  const clearBtn = q('[data-clear-muscle]', detail);
+  if(clearBtn) clearBtn.onclick = ()=>{ clearStatsMuscle(); refreshStatsDetail(); };
+  const focusBtn = q('[data-focus]', detail);
+  if(focusBtn){
+    const focus = statsFocusNext();
+    focusBtn.onclick = ()=>{
+      if(focus.action && focus.action.exerciseId) openRecordsPrSheet(focus.action.exerciseId);
+      else if(focus.action && focus.action.slug) openStatsMuscle(focus.action.slug);
+      else if(focus.slug) openStatsMuscle(focus.slug);
+    };
+  }
+  qa('[data-pr-ex]', detail).forEach(row=>{
+    const id = row.getAttribute('data-pr-ex');
+    row.onclick = ()=> openRecordsPrSheet(id);
+    row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openRecordsPrSheet(id); } };
+  });
+}
+function buildStatsDetailNode(){
+  const detail = el(recordsMuscle
+    ? statsMuscleDetailHtml(recordsMuscle, recordsMuscleList)
+    : statsOverviewDetailHtml());
+  bindStatsDetail(detail);
+  return detail;
+}
+function refreshStatsDetail(){
+  const old = q('.stats-screen .stats-detail');
+  if(!old || !old.parentNode){ renderApp(); return; }
+  syncStatsMapSel();
+  const next = buildStatsDetailNode();
+  swapDetailCard(old, next);
+}
 function openStatsMuscle(slugOrMuscle){
   const slug = SLUG_MUSCLES[slugOrMuscle] ? slugOrMuscle : slugForMuscle(slugOrMuscle);
   if(slug && recordsMuscleSlug === slug){
     clearStatsMuscle();
-    renderApp();
+    refreshStatsDetail();
     return;
   }
   if(slug && SLUG_MUSCLES[slug]){
@@ -2662,41 +2369,110 @@ function openStatsMuscle(slugOrMuscle){
     recordsMuscle = slugOrMuscle;
     recordsMuscleList = [slugOrMuscle];
   }
-  renderApp();
+  refreshStatsDetail();
 }
 function openStatsBadgeSheet(){
-  const badges = statsBadges();
-  const current = currentStatsBadge();
-  const nextPr = nextBadgesAfter(PR_HUNTER_BADGES, badges.prCount);
-  const climbEarned = STRENGTH_CLIMB_BADGES.filter(b=> badges.climbCount >= b.need);
-  const climbCurrent = climbEarned.length ? climbEarned[climbEarned.length-1] : null;
-  const nextClimb = nextBadgesAfter(STRENGTH_CLIMB_BADGES, badges.climbCount);
+  ensureBadgesSeenSeeded();
+  const totals = badgeTotals();
+  const unlocks = unseenBadgeUnlocks();
+  const celebrate = unlocks.length > 0;
   openSheet({
-    title: current.name,
+    title: 'Badge shelf',
+    onClosed: ()=>{ if(celebrate && VIEW==='stats') renderApp(); },
     build:(body)=>{
-      body.appendChild(el(`
-        <div class="stats-badge-sheet">
-          <p class="stats-fact-line">${escapeHtml(current.why)}</p>
-          <p class="section-title">Next PR badges</p>
-          ${nextPr.length
-            ? `<ul class="stats-badge-next">${nextPr.map(b=>
-                `<li><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(b.hint)} <span class="faint">(${badges.prCount}/${b.need})</span></li>`
-              ).join('')}</ul>`
-            : `<p class="faint small">You’ve cleared the PR hunter ladder. Legend.</p>`}
-          <p class="section-title">Strength climb</p>
-          <p class="faint small" style="margin-bottom:8px;">${
-            climbCurrent
-              ? `Current: ${escapeHtml(climbCurrent.name)} · ${badges.climbCount} lift${badges.climbCount===1?'':'s'} climbing`
-              : `No climb badge yet · ${badges.climbCount} lift${badges.climbCount===1?'':'s'} climbing`
-          }</p>
-          ${nextClimb.length
-            ? `<ul class="stats-badge-next">${nextClimb.map(b=>
-                `<li><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(b.hint)} <span class="faint">(${badges.climbCount}/${b.need})</span></li>`
-              ).join('')}</ul>`
-            : `<p class="faint small">Every tracked lift is climbing. Nice.</p>`}
-        </div>`));
+      const root = el(`
+        <div class="badge-shelf">
+          <p class="badge-shelf-sum">${totals.earned} of ${totals.total} badges</p>
+          <div data-ladders></div>
+        </div>`);
+      const laddersBox = q('[data-ladders]', root);
+      BADGE_LADDERS.forEach((ladder, li)=>{
+        const st = badgeLadderState(ladder);
+        const row = el(`
+          <div class="badge-ladder" data-ladder="${escapeHtml(ladder.id)}">
+            <div class="badge-ladder-head">
+              <span class="badge-ladder-title">${escapeHtml(ladder.title)}</span>
+              <span class="badge-ladder-count faint small">${
+                ladder.id==='tonnes'
+                  ? (Math.round(st.count*10)/10)+' t'
+                  : Math.floor(st.count)+' / '+(st.next ? st.next.need : ladder.steps[ladder.steps.length-1].need)
+              }</span>
+            </div>
+            <div class="badge-medal-row" data-row></div>
+            <p class="badge-ladder-detail faint small" data-detail hidden></p>
+          </div>`);
+        const medalRow = q('[data-row]', row);
+        const detail = q('[data-detail]', row);
+        ladder.steps.forEach((step, i)=>{
+          const earned = i <= st.earnedIdx;
+          const isNext = st.next && step===st.next;
+          const state = earned ? 'earned' : (isNext ? 'next' : 'locked');
+          const pct = earned ? 1 : (isNext ? st.pct : 0);
+          const isNew = celebrate && earned && i > (DATA.settings.badgesSeen[ladder.id] ?? -1);
+          const btn = el(`
+            <button type="button" class="badge-medal-btn${isNew?' is-new':''}${isNext?' is-focus':''}" data-step="${i}" aria-label="${escapeHtml(step.name)}">
+              ${badgeMedalHtml(step, ladder, {state, pct, stepIdx:i, size:52})}
+            </button>`);
+          if(earned){
+            const medal = q('.badge-medal', btn);
+            if(medal) medal.style.animationDelay = (li*40 + i*30)+'ms';
+          }
+          btn.onclick = ()=>{
+            const line = earned
+              ? `${step.name} · ${step.hint} · Earned`
+              : isNext
+                ? `${step.name} · ${badgeRemainingText(ladder, st)}`
+                : `${step.name} · ${step.hint} · Locked`;
+            detail.hidden = false;
+            detail.dataset.full = line;
+            detail.textContent = line;
+            if(typeof typeInto==='function') typeInto(detail, line);
+            qa('.badge-medal-btn', row).forEach(b=> b.classList.toggle('is-picked', b===btn));
+          };
+          medalRow.appendChild(btn);
+        });
+        laddersBox.appendChild(row);
+        const scrollToFocus = ()=>{
+          const earnedBtns = qa('.badge-medal-btn', row).filter((_,i)=> i <= st.earnedIdx);
+          const target = q('.badge-medal-btn.is-new', row)
+            || q('.badge-medal-btn.is-focus', row)
+            || earnedBtns[earnedBtns.length-1]
+            || q('.badge-medal-btn', row);
+          if(target && medalRow){
+            const left = target.offsetLeft - (medalRow.clientWidth/2) + (target.offsetWidth/2);
+            medalRow.scrollLeft = Math.max(0, left);
+          }
+        };
+        requestAnimationFrame(()=> requestAnimationFrame(scrollToFocus));
+      });
+      body.appendChild(root);
+      if(celebrate){
+        if(typeof showPrConfetti==='function') showPrConfetti();
+        markBadgesSeen();
+      }
     }
   });
+}
+function statsFocusBlockHtml(focus){
+  if(!focus) return '';
+  const bar = focus.progress
+    ? `<div class="focus-bar" aria-hidden="true"><span style="width:${focus.progress.target>0 ? Math.min(100, Math.round((focus.progress.value/focus.progress.target)*100)) : 0}%"></span></div>`
+    : '';
+  const also = focus.also
+    ? `<p class="faint small focus-also">Also: ${escapeHtml(focus.also.line)}</p>`
+    : '';
+  const btn = focus.action
+    ? `<button type="button" class="btn secondary" data-focus style="width:100%;margin-top:10px;">${escapeHtml(focus.action.label)}</button>`
+    : '';
+  return `
+    <div class="focus-card">
+      <div class="rec-kicker">Focus next</div>
+      <h3 class="stats-detail-title" data-type-title>${escapeHtml(focus.title)}</h3>
+      <p class="stats-kpi-line">${escapeHtml(focus.line)}</p>
+      ${bar}
+      ${also}
+      ${btn}
+    </div>`;
 }
 function statsOverviewDetailHtml(){
   const prs = totalPrMomentCount();
@@ -2707,7 +2483,7 @@ function statsOverviewDetailHtml(){
     : (Math.round(tonnes*10)/10).toFixed(1).replace(/\.0$/,'');
   const streak = currentStreakDays();
   const climb = strengthClimbCount();
-  const weak = statsWeakestLink();
+  const focus = statsFocusNext();
   const deload = statsDeloadInfo();
   const hasHistory = prs>0 || volKg>0 || streak>0;
   if(!hasHistory){
@@ -2716,15 +2492,14 @@ function statsOverviewDetailHtml(){
     </div>`;
   }
   return `<div class="card flat stats-detail">
-    <p class="section-title" style="margin-top:0;">Overview</p>
+    <p class="section-title" style="margin-top:0;" data-type-title>Overview</p>
     ${statGridHtml([
       {value:String(prs), label:prs===1?'PR':'PRs'},
       {value:tonnesText, label:tonnesText==='1'?'Tonne':'Tonnes'},
-      {value:String(streak), label:streak===1?'Day streak':'Day streak'},
+      {value:String(streak), label:'Day streak'},
       {value:String(climb), label:climb===1?'Lift climbing':'Lifts climbing'}
-    ])}
-    <p class="stats-kpi-line">${weak ? escapeHtml(weak.line) : 'Not enough history for a weakest link yet.'}</p>
-    ${weak ? `<button type="button" class="btn secondary" data-weak style="width:100%;margin-top:8px;">See ${escapeHtml(weak.label)}</button>` : ''}
+    ], 'cols-2')}
+    ${statsFocusBlockHtml(focus)}
     <p class="stats-kpi-line faint" style="margin-top:12px;">${escapeHtml(deload.line)}</p>
   </div>`;
 }
@@ -2756,7 +2531,7 @@ function statsMuscleDetailHtml(muscle, muscleList){
     <div class="stats-detail-head">
       <div>
         <div class="rec-kicker">Muscle</div>
-        <h3 class="stats-detail-title">${escapeHtml(muscle)}</h3>
+        <h3 class="stats-detail-title" data-type-title>${escapeHtml(muscle)}</h3>
         <div class="rec-sub">${escapeHtml(summary)}</div>
       </div>
       <button type="button" class="btn ghost" data-clear-muscle aria-label="Clear muscle">Clear</button>
@@ -2768,12 +2543,28 @@ function renderStatsScreen(){
   const wrap = el(`<div class="stats-screen"></div>`);
   wrap.appendChild(el(`<h3 class="stats-title">Stats</h3>`));
 
-  const current = currentStatsBadge();
+  const featured = featuredBadge();
+  const medalState = featured.earned && !featured.state.next ? 'earned'
+    : featured.state.next ? 'next' : (featured.earned ? 'earned' : 'locked');
+  const medalPct = featured.state.next ? featured.pct : (featured.earned ? 1 : 0);
   const badgeChip = el(`
-    <button type="button" class="stats-badge-chip${current.earned?' earned':''}" data-badge>
-      <span class="stats-badge-chip-kicker">${current.earned?'Badge':'Next badge'}</span>
-      <span class="stats-badge-chip-name">${escapeHtml(current.name)}</span>
-      <span class="stats-badge-chip-meta">${escapeHtml(current.progressLabel)}</span>
+    <button type="button" class="stats-badge-chip${featured.earned?' earned':''}${featured.isNew?' is-new':''}" data-badge>
+      ${featured.isNew ? '<span class="stats-badge-new" aria-hidden="true">New</span>' : ''}
+      <span class="stats-badge-medal">
+        ${badgeMedalHtml(featured.step, featured.ladder, {
+          state: medalState,
+          pct: medalPct,
+          stepIdx: Math.max(0, featured.state.earnedIdx),
+          tier: featured.tier,
+          size: 52
+        })}
+      </span>
+      <span class="stats-badge-copy">
+        <span class="stats-badge-chip-kicker">${escapeHtml(featured.kicker)}</span>
+        <span class="stats-badge-chip-name">${escapeHtml(featured.name)}</span>
+        <span class="stats-badge-progress" aria-hidden="true"><span style="width:${Math.round(medalPct*100)}%"></span></span>
+        <span class="stats-badge-chip-meta">${escapeHtml(featured.progressLabel)}</span>
+      </span>
     </button>`);
   badgeChip.onclick = ()=> openStatsBadgeSheet();
   wrap.appendChild(badgeChip);
@@ -2786,22 +2577,7 @@ function renderStatsScreen(){
   bindBodyMapClicks(mapCard, slug=> openStatsMuscle(slug));
   wrap.appendChild(mapCard);
 
-  const detail = el(recordsMuscle
-    ? statsMuscleDetailHtml(recordsMuscle, recordsMuscleList)
-    : statsOverviewDetailHtml());
-  const clearBtn = q('[data-clear-muscle]', detail);
-  if(clearBtn) clearBtn.onclick = ()=>{ clearStatsMuscle(); renderApp(); };
-  const weakBtn = q('[data-weak]', detail);
-  if(weakBtn){
-    const weak = statsWeakestLink();
-    if(weak) weakBtn.onclick = ()=> openStatsMuscle(weak.slug);
-  }
-  qa('[data-pr-ex]', detail).forEach(row=>{
-    const id = row.getAttribute('data-pr-ex');
-    row.onclick = ()=> openRecordsPrSheet(id);
-    row.onkeydown = e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openRecordsPrSheet(id); } };
-  });
-  wrap.appendChild(detail);
+  wrap.appendChild(buildStatsDetailNode());
 
   const volKg = lifetimeVolumeKg();
   const story = volumeStoryFact(volKg);
@@ -2811,14 +2587,6 @@ function renderStatsScreen(){
   </div>`));
 
   return wrap;
-}
-function renderRecordsScreen(){ return renderStatsScreen(); }
-function renderRecordsMuscleScreen(muscle, muscleList){
-  // Kept for callers; Stats now shows muscle PRs inline.
-  recordsMuscle = muscle;
-  recordsMuscleList = muscleList || [muscle];
-  recordsMuscleSlug = slugForMuscle(muscle) || (SLUG_MUSCLES[muscle] ? muscle : null);
-  return renderStatsScreen();
 }
 let prTreeOpen = {year:null, month:null, week:null};
 function prDayLabel(dateStr){
@@ -2976,17 +2744,24 @@ function openRecordsPrSheet(exerciseId){
 /* ------------------------------ History ------------------------------ */
 /* In-memory only. Workout rows still come from DATA.logs on every render. */
 let historyFilter = 'all';
-let historyCharts = [];
+let historyDay = null;          // YYYY-MM-DD when a gym square is selected
 let afterHistoryRender = [];
 let gymYearObserver = null;
 let historyTreeOpen = {year:null, month:null, week:null};
 let weightLogOpen = false;
 let pastWorkoutsOpen = false;
 let weightTreeOpen = {year:null, month:null, week:null};
-
-function destroyHistoryCharts(){
-  historyCharts.forEach(chart=>{ try{ chart.destroy(); }catch(e){} });
-  historyCharts = [];
+function resetHistoryState(){
+  historyFilter = 'all';
+  historyDay = null;
+  historyTreeOpen = {year:null, month:null, week:null};
+  weightTreeOpen = {year:null, month:null, week:null};
+  pastWorkoutsOpen = false;
+  weightLogOpen = false;
+}
+function resetTabState(tab){
+  if(tab==='stats') clearStatsMuscle();
+  if(tab==='history') resetHistoryState();
 }
 function thisMonthKey(){ return todayKey().slice(0,7); }
 function shiftMonthKey(ym, delta){
@@ -3067,12 +2842,6 @@ function shiftDateKey(key, days){
   d.setDate(d.getDate()+days);
   return dateKey(d);
 }
-function daysInclusive(from, to){
-  return Math.max(1, Math.round((parseDateKey(to)-parseDateKey(from))/86400000)+1);
-}
-function logsVolumeLoad(logs){
-  return logs.reduce((sum,log)=> sum + (log.sets||[]).reduce((s,set)=> s+setVolumeLoad(set), 0), 0);
-}
 function historyWindow(filter, logs){
   const range = historyRangeKey(filter);
   const today = todayKey();
@@ -3089,18 +2858,12 @@ function historyInsights(logs, filter){
   const window = historyWindow(filter, logs);
   const days = daysInclusive(window.start, window.end);
   const weeks = Math.max(days/7, 1);
-  const volume = logsVolumeLoad(logs);
-  const prevEnd = shiftDateKey(window.start, -1);
-  const prevStart = shiftDateKey(window.start, -days);
-  const prevVolume = logsVolumeLoad(loggedWorkouts().filter(l=>l.date>=prevStart && l.date<=prevEnd));
   const sets = logs.flatMap(l=>l.sets||[]);
   const muscleTarget = TRAINING.weeklyEffectiveSetTarget * weeks;
   const muscles = muscleWorkForSets(sets).filter(r=>r.effectiveSets>=0.2).slice(0,8);
   const under = muscles.filter(r=>r.effectiveSets < muscleTarget*0.5).slice(0,2).map(r=>r.muscle);
   return {
     streak: currentStreakDays(),
-    sessionsPerWeek: logs.length/weeks,
-    volumeDeltaPct: prevVolume>0 ? ((volume-prevVolume)/prevVolume)*100 : null,
     prs: sets.filter(s=>s.isPR).length,
     muscles,
     muscleTarget,
@@ -3319,18 +3082,149 @@ function gymYearCell(key, trained, minutes, today){
   if(!key) return el(`<div class="gym-year-slot"></div>`);
   const went = trained.has(key);
   const rest = !went && !isTrainingDate(key);
+  const future = key > today;
   const cls = ['gym-year-cell'];
   if(went) cls.push('on');
   else if(rest) cls.push('rest');
   if(key===today) cls.push('today');
+  if(historyDay===key) cls.push('sel');
   let title = formatLogDate(key);
   if(went && minutes[key]) title += ' · '+formatDuration(minutes[key]*60000);
   else if(rest) title += ' · Rest';
-  const cell = el(went
-    ? `<button type="button" class="${cls.join(' ')}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></button>`
-    : `<div class="${cls.join(' ')}" title="${escapeHtml(title)}"></div>`);
-  if(went) cell.onclick = ()=> openHistoryDaySheet(key);
+  else if(!went && !future) title += ' · No workout';
+  if(future){
+    return el(`<div class="${cls.join(' ')}" data-date="${key}" title="${escapeHtml(title)}"></div>`);
+  }
+  const cell = el(`<button type="button" class="${cls.join(' ')}" data-date="${key}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" aria-pressed="${historyDay===key?'true':'false'}"></button>`);
+  cell.onclick = ()=> selectHistoryDay(key);
   return cell;
+}
+function syncHistoryDaySel(){
+  qa('.gym-year-cell[data-date]').forEach(cell=>{
+    const on = cell.getAttribute('data-date')===historyDay;
+    cell.classList.toggle('sel', on);
+    if(cell.hasAttribute('aria-pressed')) cell.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+const HISTORY_GUILT_MISSED = [
+  'Nothing happened. The dumbbells waited all day.',
+  '0 sets. Your muscles filed a missing person report.',
+  'The squat rack asked about you.',
+  'An empty gym day. The plates are disappointed.',
+  'You ghosted your muscles. They noticed.',
+  'Zero work. Tomorrow gets a second chance.',
+  'The bench sat unused. Dramatic sighs all around.',
+  'No sets logged. Even the mirror looked away.'
+];
+function historyGuiltHash(date){
+  let h = 0;
+  for(let i=0;i<(date||'').length;i++) h = (h*31 + date.charCodeAt(i)) >>> 0;
+  return h;
+}
+function historyGuiltLine(date){
+  const today = todayKey();
+  if(date===today) return 'Still time. The gym is open.';
+  if(!isTrainingDate(date)) return 'Rest day. You earned it… probably.';
+  return HISTORY_GUILT_MISSED[historyGuiltHash(date) % HISTORY_GUILT_MISSED.length];
+}
+function historyDayLog(date){
+  return (DATA.logs||[]).find(l=>l.date===date && l.sets && l.sets.length) || null;
+}
+function bindHistorySummaryCard(card, logs, filter){
+  if(!card) return;
+  const clearDay = q('[data-clear-day]', card);
+  if(clearDay) clearDay.onclick = ()=>{ historyDay = null; refreshHistorySummary(); };
+  const seeSets = q('[data-see-sets]', card);
+  if(seeSets){
+    const date = seeSets.getAttribute('data-see-sets');
+    seeSets.onclick = ()=> openHistoryDaySheet(date);
+  }
+  const scoreInfo = q('[data-score-info]', card);
+  if(scoreInfo) scoreInfo.onclick = (e)=>{ e.stopPropagation(); openScoreInfoSheet(); };
+  const gainInfo = q('[data-gain-info]', card);
+  if(gainInfo) gainInfo.onclick = (e)=>{ e.stopPropagation(); openWeightGainSheet(logs, filter); };
+  const rangeField = q('#historyRange', card);
+  if(rangeField){
+    bindChoiceField(rangeField, {
+      title:'Workout summary range',
+      options:()=> historyRangeOptions(historyMonthOptions(loggedWorkouts())),
+      onChange:(value)=>{
+        historyFilter = normalizeHistoryFilter(value);
+        historyTreeOpen = {year:null, month:null, week:null};
+        pastWorkoutsOpen = false;
+        historyDay = null;
+        renderApp();
+      }
+    });
+  }
+}
+function historyDaySummaryCard(date){
+  const log = historyDayLog(date);
+  const sets = log ? (log.sets||[]) : [];
+  const dayName = log
+    ? (log.planName || (splitDays()[log.dayKey||weekdayKey(parseDateKey(date))]||{}).name || '')
+    : ((splitDays()[weekdayKey(parseDateKey(date))]||{}).name || '');
+  const head = `
+    <div class="stats-detail-head">
+      <div>
+        <div class="rec-kicker">Day</div>
+        <h3 class="stats-detail-title" data-type-title>${escapeHtml(formatLogDate(date))}</h3>
+        ${dayName ? `<div class="rec-sub">${escapeHtml(dayName)}</div>` : ''}
+      </div>
+      <button type="button" class="btn ghost" data-clear-day aria-label="Clear day">Clear</button>
+    </div>`;
+  if(log){
+    const workSets = workingSetCount(sets);
+    const dur = sessionDurationMs(log);
+    const prs = sets.filter(s=>s.isPR).length;
+    const muscles = muscleWorkForSets(sets).filter(r=>r.effectiveSets>=0.2).slice(0,8);
+    const peak = Math.max(...muscles.map(r=>r.effectiveSets), 1);
+    return el(`
+      <div class="card" data-history-summary>
+        ${head}
+        ${statGridHtml([
+          {value:String(workSets), label:workSets===1?'Set':'Sets'},
+          {value:String(roundTo(totalEffectiveSets(sets))), label:'Effective'},
+          {value:escapeHtml(dur>0 ? formatDuration(dur) : '—'), label:'Time'},
+          {value:String(prs), label:prs===1?'Record':'Records'}
+        ], 'cols-2')}
+        <div style="margin-top:14px;">
+          <p class="small muted" style="margin-bottom:4px;">Muscle targeting</p>
+          ${historyMuscleRowsHtml(muscles, peak)}
+        </div>
+        <button type="button" class="btn secondary" data-see-sets="${escapeHtml(date)}" style="width:100%;margin-top:12px;">See sets</button>
+      </div>`);
+  }
+  const guilt = historyGuiltLine(date);
+  return el(`
+    <div class="card" data-history-summary>
+      ${head}
+      ${statGridHtml([
+        {value:'0', label:'Sets'},
+        {value:'0', label:'Effective'},
+        {value:'—', label:'Time'},
+        {value:'0', label:'Records'}
+      ], 'cols-2')}
+      <div style="margin-top:14px;">
+        <p class="small muted" style="margin-bottom:4px;">Muscle targeting</p>
+        <p class="faint small" style="margin-top:8px;" data-empty-pulse>No muscle work.</p>
+        <p class="stats-kpi-line" data-type-title data-guilt>${escapeHtml(guilt)}</p>
+      </div>
+    </div>`);
+}
+function selectHistoryDay(date){
+  if(!date) return;
+  historyDay = historyDay===date ? null : date;
+  syncHistoryDaySel();
+  refreshHistorySummary();
+}
+function refreshHistorySummary(){
+  const old = q('[data-history-summary]');
+  if(!old || !old.parentNode){ renderApp(); return; }
+  const allLogs = loggedWorkouts();
+  const logs = allLogs.filter(l=>workoutInHistoryFilter(l, historyFilter));
+  const next = renderHistorySummaryCard(logs, historyFilter);
+  swapDetailCard(old, next);
 }
 function gymYearActivity(){
   const minutes = {};
@@ -3436,7 +3330,11 @@ function layoutGymYear(root, keepScroll){
       });
     });
   }
-  gymYearObserver.observe(root);
+  if(gymYearObserver._root!==root){
+    gymYearObserver.disconnect();
+    gymYearObserver.observe(root);
+    gymYearObserver._root = root;
+  }
 }
 function historyGymCard(){
   const card = el(`
@@ -3802,11 +3700,16 @@ function historyRangeSelectHtml(months){
   return choiceFieldHtml({id:'historyRange', label:null, value:cur, display:historyRangeLabel(cur, months)});
 }
 function renderHistorySummaryCard(logs, filter){
+  if(historyDay){
+    const card = historyDaySummaryCard(historyDay);
+    bindHistorySummaryCard(card, logs, filter);
+    return card;
+  }
   const insight = historyInsights(logs, filter);
   const range = historyRangeKpis(logs, filter);
   const card = el(`
-    <div class="card">
-      <p class="section-title" style="margin-top:0;">Workout summary</p>
+    <div class="card" data-history-summary>
+      <p class="section-title" style="margin-top:0;" data-type-title>Workout summary</p>
       <div class="field" style="margin:0 0 12px;">${historyRangeSelectHtml(historyMonthOptions(loggedWorkouts()))}</div>
       ${statGridHtml([
         {value:range.score==null ? '—' : `${range.score}<span class="stat-of">/100</span>`, label:'Score', infoHtml:`<button type="button" class="stat-info" data-score-info aria-label="How the score is measured">${icon('info',13)}</button>`},
@@ -3820,20 +3723,7 @@ function renderHistorySummaryCard(logs, filter){
         ${insight.underNote?`<p class="faint small" style="margin-top:8px;">${escapeHtml(insight.underNote)}</p>`:''}
       </div>
     </div>`);
-  const scoreInfo = q('[data-score-info]', card);
-  if(scoreInfo) scoreInfo.onclick = (e)=>{ e.stopPropagation(); openScoreInfoSheet(); };
-  const gainInfo = q('[data-gain-info]', card);
-  if(gainInfo) gainInfo.onclick = (e)=>{ e.stopPropagation(); openWeightGainSheet(logs, filter); };
-  bindChoiceField(q('#historyRange', card), {
-    title:'Workout summary range',
-    options:()=> historyRangeOptions(historyMonthOptions(loggedWorkouts())),
-    onChange:(value)=>{
-      historyFilter = normalizeHistoryFilter(value);
-      historyTreeOpen = {year:null, month:null, week:null};
-      pastWorkoutsOpen = false;
-      renderApp();
-    }
-  });
+  bindHistorySummaryCard(card, logs, filter);
   return card;
 }
 function historyWorkoutRow(log){
@@ -3844,7 +3734,7 @@ function historyWorkoutRow(log){
   const row = el(`
     <div class="hist-day" style="cursor:pointer;">
       <strong>${escapeHtml(when)}</strong>${dayName?` · ${escapeHtml(dayName)}`:''} ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
-      <div class="faint small">${workingSetCount(log.sets)} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${formatDuration(dur)}`:''}</div>
+      <div class="faint small">${workingSetCount(log.sets)}\u00a0sets · ≈\u00a0${roundTo(totalEffectiveSets(log.sets))}\u00a0effective${dur>0?` · ${formatDuration(dur)}`:''}</div>
     </div>`);
   row.onclick = ()=> openHistoryDaySheet(log.date);
   return row;
@@ -3863,7 +3753,7 @@ function recentWorkoutRow(log, isLatest){
       </div>
       <div class="recent-main">
         <div class="nm">${escapeHtml(dayName)}</div>
-        <div class="faint small">${escapeHtml(when)} · ${workingSetCount(log.sets)} sets · ≈ ${roundTo(totalEffectiveSets(log.sets))} effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
+        <div class="faint small">${escapeHtml(when)} · ${workingSetCount(log.sets)}\u00a0sets · ≈\u00a0${roundTo(totalEffectiveSets(log.sets))}\u00a0effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
       </div>
       ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
       <span class="recent-go">${icon('chevronRight',18)}</span>
@@ -3920,17 +3810,17 @@ function renderHistoryScreen(){
   const allLogs = loggedWorkouts();
   wrap.appendChild(el(`<h3 style="margin-bottom:14px;">History</h3>`));
   wrap.appendChild(renderBodyWeightCard());
+  wrap.appendChild(historyGymCard());
 
   const logs = allLogs.filter(l=>workoutInHistoryFilter(l, historyFilter));
   if(!allLogs.length){
-    wrap.appendChild(historyGymCard());
+    wrap.appendChild(renderHistorySummaryCard(logs, historyFilter));
     wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
     wrap.appendChild(el(`<div class="card"><p class="empty">No workouts logged yet. Head to Home and start your first session.</p></div>`));
     return wrap;
   }
 
   wrap.appendChild(renderHistorySummaryCard(logs, historyFilter));
-  wrap.appendChild(historyGymCard());
   wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
   if(!logs.length){
     wrap.appendChild(el(`<div class="card"><p class="empty">No workouts recorded for this month.</p></div>`));
@@ -4190,7 +4080,7 @@ function trainingGuideSections(){
 
 function openTrainingGuideSheet(openKey){
   openSheet({
-    title:"FAQ's",
+    title:'FAQs',
     build:(body)=>{
       const wrap = el(`
         <div class="guide">
@@ -4231,9 +4121,23 @@ async function checkForUpdates(btn){
 function openUpdateSheet(info){
   const notesUrl = SITE_URL + (info.notes || 'downloads/');
   const android = isAndroidApp();
+  const updater = android ? capPlugin('AppUpdater') : null;
+  const apkUrl = info.apk ? SITE_URL + info.apk : '';
   const date = /^\d{4}-\d{2}-\d{2}$/.test(info.date||'')
     ? parseDateKey(info.date).toLocaleDateString(undefined,{day:'numeric', month:'long', year:'numeric'}) : '';
   const highlights = Array.isArray(info.highlights) ? info.highlights.filter(h=>typeof h==='string' && h.trim()) : [];
+  let ctaHtml;
+  if(updater && apkUrl){
+    ctaHtml = `<button class="btn update-cta" data-install>${icon('download',18)} Update now</button>
+      <div class="update-progress" hidden><div class="update-progress-bar" data-bar></div></div>
+      <p class="faint small" data-hint style="margin:8px 2px 0;">Downloads in the background, then Android asks you to install. Your workouts stay.</p>`;
+  } else if(android){
+    ctaHtml = `<a class="btn update-cta" href="${escapeHtml(notesUrl)}" target="_blank" rel="noopener noreferrer">${icon('download',18)} Download update</a>
+      <p class="faint small" style="margin:8px 2px 0;">Opens the download page. Installing over this version keeps all your workouts.</p>`;
+  } else {
+    ctaHtml = `<button class="btn update-cta" data-reload>${icon('reopen',18)} Update now</button>`;
+  }
+  let stopUpdate = null;
   openSheet({
     title:'Update available',
     build:(body)=>{
@@ -4245,16 +4149,137 @@ function openUpdateSheet(info){
           </div>
           ${highlights.length ? `<p class="small muted" style="margin:14px 0 6px;">What's new</p>
             <ul class="update-list">${highlights.map(h=>`<li>${escapeHtml(h)}</li>`).join('')}</ul>` : ''}
-          ${android
-            ? `<a class="btn update-cta" href="${escapeHtml(notesUrl)}" target="_blank" rel="noopener noreferrer">${icon('download',18)} Download update</a>
-               <p class="faint small" style="margin:8px 2px 0;">Opens the download page. Installing over this version keeps all your workouts.</p>`
-            : `<button class="btn update-cta" data-reload>${icon('reopen',18)} Update now</button>`}
+          ${ctaHtml}
           <a class="btn secondary update-cta" href="${escapeHtml(notesUrl)}" target="_blank" rel="noopener noreferrer" style="margin-top:10px;">Full release notes</a>
         </div>`));
       const reload = q('[data-reload]',body);
       if(reload) reload.onclick = ()=> location.reload();
-    }
+      const installBtn = q('[data-install]',body);
+      if(installBtn && updater) stopUpdate = bindInAppUpdate(installBtn, body, updater, info, apkUrl);
+    },
+    onClosed: ()=>{ if(stopUpdate) stopUpdate(); }
   });
+}
+
+/* Android in-app APK update: permission → download with progress → PackageInstaller.
+   Returns a cleanup fn so the resume listener is dropped when the sheet closes. */
+function bindInAppUpdate(btn, body, updater, info, apkUrl){
+  const progress = q('.update-progress', body);
+  const bar = q('[data-bar]', body);
+  const hint = q('[data-hint]', body);
+  const idleLabel = btn.innerHTML;
+  let busy = false;
+  let waitingForPermission = false;
+  let progressHandle = null;
+  let resumeHandle = null;
+  let alive = true;
+
+  function setProgress(pct){
+    if(!progress || !bar) return;
+    progress.hidden = false;
+    bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+  function resetUi(label){
+    busy = false;
+    btn.disabled = false;
+    btn.innerHTML = label || idleLabel;
+    if(progress) progress.hidden = true;
+    if(bar) bar.style.width = '0%';
+  }
+  async function dropProgress(){
+    if(progressHandle && progressHandle.remove){
+      try{ await progressHandle.remove(); }catch(_){}
+    }
+    progressHandle = null;
+  }
+  async function ensurePermission(){
+    const can = await updater.canInstall();
+    if(can && can.value) return true;
+    if(hint) hint.textContent = "Android needs your OK to let TrackA'gain install its own updates.";
+    waitingForPermission = true;
+    await updater.openInstallSettings();
+    return false;
+  }
+  async function runUpdate(){
+    if(!alive || busy) return;
+    busy = true;
+    btn.disabled = true;
+    try{
+      if(!(await ensurePermission())){
+        busy = false;
+        btn.disabled = false;
+        return;
+      }
+      if(!alive) return;
+      if(hint) hint.textContent = 'Downloads in the background, then Android asks you to install. Your workouts stay.';
+      btn.textContent = 'Downloading…';
+      setProgress(0);
+      await dropProgress();
+      progressHandle = await updater.addListener('progress', (ev)=>{
+        if(!alive) return;
+        const total = Number(ev && ev.total) || 0;
+        const loaded = Number(ev && ev.loaded) || 0;
+        const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+        btn.textContent = total > 0 ? `Downloading… ${pct}%` : 'Downloading…';
+        setProgress(pct);
+      });
+      const size = typeof info.apkSize === 'number' ? info.apkSize : undefined;
+      const sha256 = typeof info.sha256 === 'string' ? info.sha256 : undefined;
+      await updater.download({url:apkUrl, size, sha256});
+      await dropProgress();
+      if(!alive) return;
+      btn.textContent = 'Installing…';
+      setProgress(100);
+      await updater.install();
+      if(alive){
+        showToast('Update started');
+        resetUi();
+      }
+    }catch(err){
+      await dropProgress();
+      if(!alive) return;
+      const code = err && (err.code || err.errorCode);
+      if(code === 'NEED_PERMISSION'){
+        if(hint) hint.textContent = "Android needs your OK to let TrackA'gain install its own updates.";
+        waitingForPermission = true;
+        try{ await updater.openInstallSettings(); }catch(_){}
+        resetUi(idleLabel);
+        return;
+      }
+      if(code === 'CANCELLED'){
+        showToast('Update cancelled');
+        resetUi(idleLabel);
+        return;
+      }
+      showToast("Couldn't update. Check your connection and try again.");
+      resetUi(`${icon('download',18)} Try again`);
+    }
+  }
+
+  btn.onclick = ()=> runUpdate();
+
+  const capApp = capacitorAppPlugin();
+  if(capApp && capApp.addListener){
+    Promise.resolve(capApp.addListener('appStateChange', (state)=>{
+      if(!alive || !waitingForPermission || !state || state.isActive!==true) return;
+      waitingForPermission = false;
+      updater.canInstall().then((can)=>{
+        if(!alive) return;
+        if(can && can.value) runUpdate();
+        else if(hint) hint.textContent = "Android needs your OK to let TrackA'gain install its own updates. Tap Update now when you're back.";
+      }).catch(()=>{});
+    })).then((h)=>{ resumeHandle = h; }).catch(()=>{});
+  }
+
+  return ()=>{
+    alive = false;
+    waitingForPermission = false;
+    dropProgress();
+    if(resumeHandle && resumeHandle.remove){
+      try{ resumeHandle.remove(); }catch(_){}
+      resumeHandle = null;
+    }
+  };
 }
 
 function renderSettingsScreen(){
@@ -4264,7 +4289,7 @@ function renderSettingsScreen(){
 
   const themeCard = el(`
     <div class="card">
-      <p class="small muted" style="margin-bottom:10px;">Appearance</p>
+      <label>Appearance</label>
       <div class="row">
         <div class="chip ${currentTheme()==='dark'?'on':''}" data-th="dark" style="flex:1;justify-content:center;">${icon('moon',16)} Dark</div>
         <div class="chip ${currentTheme()==='light'?'on':''}" data-th="light" style="flex:1;justify-content:center;">${icon('sun',16)} Light</div>
@@ -4342,6 +4367,8 @@ function renderSettingsScreen(){
         `Also change the ${rows.length} exercise${rows.length>1?'s':''} in your ${split.label} split that ${rows.length>1?'have':'has'} ${before} set${before>1?'s':''} to ${next}?`,
         'Update split', ()=>{
           rows.forEach(row=>{ row.sets = next; });
+          touchActivePreset();
+          syncActiveWorkoutFromSplit({fromSave:true});
           saveData(DATA);
           showToast(`${rows.length} exercise${rows.length>1?'s':''} now ${next} set${next>1?'s':''}`);
           renderApp();
@@ -4363,11 +4390,11 @@ function renderSettingsScreen(){
   });
   wrap.appendChild(trainingCard);
 
-  wrap.appendChild(el(`<div class="section-title">FAQ's</div>`));
+  wrap.appendChild(el(`<div class="section-title">FAQs</div>`));
   const guideCard = el(`
     <div class="card guide-card">
       <p class="small muted">How Spotter picks the next weight and reps, and what each goal means.</p>
-      <button class="btn secondary" data-guide style="width:100%;margin-top:10px;">${icon('info',16)} Open FAQ's</button>
+      <button class="btn secondary" data-guide style="width:100%;margin-top:10px;">${icon('info',16)} Open FAQs</button>
     </div>`);
   q('[data-guide]',guideCard).onclick = ()=> openTrainingGuideSheet();
   wrap.appendChild(guideCard);
@@ -4412,7 +4439,12 @@ function renderSettingsScreen(){
       DATA.settings.restSetupAsked = true;
       saveData(DATA);
       const ok = await ensureRestNotifyPermission();
-      if(!ok) showToast('Notifications are blocked for '+APP_NAME+' in your phone settings');
+      if(!ok){
+        DATA.settings.restNotify = false;
+        saveData(DATA);
+        e.target.checked = false;
+        showToast('Notifications are blocked for '+APP_NAME+' in your phone settings');
+      }
       else if(isAndroidApp()) await runRestAlertSetup();
     }
   };
@@ -4602,12 +4634,21 @@ function applyDataReset(picked){
   if(picked.has('history')){
     DATA.logs = [];
     DATA.progress = {};
+    spotterForget();
   }
   if(picked.has('records')){
     (DATA.logs||[]).forEach(log=> (log.sets||[]).forEach(set=>{ set.isPR = false; }));
   }
   if(picked.has('weight')) DATA.bodyWeight = [];
-  if(picked.has('settings')) DATA.settings = defaultSettings();
+  if(picked.has('settings')){
+    /* Bookkeeping, not preferences: keep the user past onboarding, deleted presets
+       deleted, and one-time upgrades from running again. */
+    const keep = ['onboarded','dismissedPresets','dismissedSessions','presetsVersion','prRulesVersion',
+      'badgesSeen','badgesSeenSeeded','weightedBwMigrated','muscleTagsV2','gearWarmupsSwept','restSetupAsked'];
+    const prev = DATA.settings;
+    DATA.settings = defaultSettings();
+    keep.forEach(k=>{ if(k in prev) DATA.settings[k] = prev[k]; });
+  }
   if(picked.has('presets')){
     DATA.presets = [];
     DATA.settings.dismissedPresets = [];

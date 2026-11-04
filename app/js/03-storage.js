@@ -1,10 +1,14 @@
 /* ============================ §3 STORAGE ============================ */
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function clone(value){ return JSON.parse(JSON.stringify(value)); }
+function roundTo(value, dp=1){ const f=Math.pow(10,dp); return Math.round(value*f)/f; }
 function dateKey(d=new Date()){ const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`; }
 function parseDateKey(dateStr){ return new Date(dateStr+'T00:00:00'); }
 function todayKey(){ return dateKey(); }
 function weekdayKey(d=new Date()){ return DAY_KEYS[d.getDay()]; }
+function daysInclusive(from, to){
+  return Math.max(1, Math.round((parseDateKey(to)-parseDateKey(from))/86400000)+1);
+}
 function units(){ return 'kg'; }
 
 function makeExercise(c){
@@ -28,7 +32,8 @@ function guessEquipment(text){
   return null;
 }
 function defaultPlanSets(){
-  const n = DATA && DATA.settings && parseInt(DATA.settings.defaultPlanSets, 10);
+  const d = liveData();
+  const n = d && d.settings && parseInt(d.settings.defaultPlanSets, 10);
   return Math.min(8, Math.max(1, n || 2));
 }
 /* Saved sets/time on the exercise itself, used when it is not on the split. */
@@ -209,16 +214,20 @@ function ensureWarmupLibrary(data){
   });
   return data.warmupLibrary;
 }
+function liveWarmupLibrary(){
+  const d = liveData();
+  return (d && Array.isArray(d.warmupLibrary)) ? d.warmupLibrary : [];
+}
 function getWarmupLibraryItem(id){
-  return ((DATA && DATA.warmupLibrary) || []).find(w=>w && w.id===id) || null;
+  return liveWarmupLibrary().find(w=>w && w.id===id) || null;
 }
 function warmupsForMuscle(muscle){
-  return ((DATA && DATA.warmupLibrary) || []).filter(w=> (w.primary||'Other')===muscle)
+  return liveWarmupLibrary().filter(w=> (w.primary||'Other')===muscle)
     .sort((a,b)=> a.title.localeCompare(b.title));
 }
 function searchWarmups(term, pool){
   const q = String(term||'').trim().toLowerCase();
-  const list = pool || ((DATA && DATA.warmupLibrary) || []);
+  const list = pool || liveWarmupLibrary();
   if(!q) return list.slice().sort((a,b)=> a.title.localeCompare(b.title));
   return list.filter(w=>{
     const hay = [w.title, w.detail, w.howTo, w.primary, MUSCLE_REGION[w.primary]||''].join(' ').toLowerCase();
@@ -331,7 +340,7 @@ function suggestWarmupsForExercises(exercises){
     used.add(key);
     picked.push(row);
   };
-  const lib = (DATA && DATA.warmupLibrary) || [];
+  const lib = liveWarmupLibrary();
   const pulse = lib.find(w=> warmupTitleKey(w)==='easy march or arm circles') || WARMUP_BASICS[0];
   add(pulse);
   const muscles = [];
@@ -347,7 +356,7 @@ function suggestWarmupsForExercises(exercises){
   });
   return picked;
 }
-function ensureDayWarmups(day, exercises, seedIfMissing){
+function ensureDayWarmups(day, exercises, seedIfMissing, sweepGear){
   if(!day) return day;
   if(!Array.isArray(day.exercises)) day.exercises = [];
   if(!Array.isArray(day.warmups)){
@@ -357,7 +366,7 @@ function ensureDayWarmups(day, exercises, seedIfMissing){
   } else {
     day.warmups = day.warmups.map(normalizeWarmupRow).filter(Boolean);
   }
-  if(day.warmups.some(warmupNeedsGear)){
+  if(sweepGear!==false && day.warmups.some(warmupNeedsGear)){
     day.warmups = day.exercises.length ? basicWarmupsForDay() : day.warmups.filter(w=>!warmupNeedsGear(w));
   }
   return day;
@@ -470,6 +479,92 @@ function buildGodsPlanSplit(exercises){
     sun:{name:'Rest', exercises:[]}
   };
   return ensureSplitWarmups({ label:"God's Plan", days }, exercises);
+}
+
+/* Light full-body hit list for Something else? after a break.
+   Missing catalog names are skipped. */
+function buildFullBodyPlan(exercises){
+  const note = 'Easy weight · stop 3–4 reps short';
+  const R = (name, sets, a, b, rest)=> godsPlanRow(exercises, name, sets, a, b, rest, note);
+  return [
+    R('Leg Press',2,10,12,120),
+    R('Dumbbell Press',2,10,12,90),
+    R('Lat Pulldown',2,10,12,90),
+    R('Leg Curl',2,10,12,60),
+    R('Seated Cable Row',2,10,12,90),
+    R('Machine Shoulder Press',2,10,12,60),
+    godsPlanRow(exercises, 'Plank', 2, 30, 45, 45, note)
+  ].filter(Boolean);
+}
+
+/* Saved sessions under Something else? (outside the split).
+   warmups:null means "suggest from the exercises" when used. */
+const BUILTIN_SESSIONS = [
+  {id:'builtin-fullbody', name:'Full Body', build:ex=> buildFullBodyPlan(ex)}
+];
+function normalizeSessionPlanRow(row){
+  if(!row || typeof row!=='object') return null;
+  if(typeof row.rpe === 'undefined') row.rpe = null;
+  if(typeof row.notes !== 'string') row.notes = '';
+  upgradeWarmupNote(row);
+  if(!row.sets) row.sets = 3;
+  if(!row.repsMin) row.repsMin = 8;
+  if(!row.repsMax) row.repsMax = 12;
+  if(typeof row.restSeconds === 'undefined') row.restSeconds = null;
+  if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
+  if(typeof row.supersetId === 'undefined') row.supersetId = null;
+  if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
+  ensureRowEquipment(row);
+  return row;
+}
+function ensureBuiltinSessions(data){
+  data.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+  const s = data.settings = data.settings || {};
+  if(!Array.isArray(s.dismissedSessions)) s.dismissedSessions = [];
+  const dismissed = new Set(s.dismissedSessions);
+  BUILTIN_SESSIONS.forEach(b=>{
+    if(dismissed.has(b.id)) return;
+    const existing = data.sessions.find(p=> p && (p.id===b.id || (p.name||'').trim().toLowerCase()===b.name.toLowerCase()));
+    if(existing){
+      if(!existing.id) existing.id = b.id;
+      return;
+    }
+    data.sessions.push({
+      id:b.id,
+      name:b.name,
+      exercises:b.build(data.exercises || []),
+      warmups:null
+    });
+  });
+  data.sessions.forEach(session=>{
+    if(!session || typeof session!=='object') return;
+    if(!session.id) session.id = uid();
+    if(typeof session.name !== 'string' || !session.name.trim()) session.name = 'Session';
+    if(!Array.isArray(session.exercises)) session.exercises = [];
+    session.exercises.forEach(normalizeSessionPlanRow);
+    if(session.warmups!=null){
+      if(!Array.isArray(session.warmups)) session.warmups = [];
+      else session.warmups = session.warmups.map(normalizeWarmupRow).filter(Boolean);
+    }
+  });
+  data.sessions = data.sessions.filter(p=>p && p.id);
+}
+function dismissBuiltinSession(session){
+  if(!session) return;
+  const s = DATA.settings;
+  const ids = new Set(Array.isArray(s.dismissedSessions) ? s.dismissedSessions : []);
+  BUILTIN_SESSIONS.forEach(b=>{
+    if(session.id===b.id || (session.name||'').trim().toLowerCase()===b.name.toLowerCase()) ids.add(b.id);
+  });
+  s.dismissedSessions = [...ids];
+}
+function getSession(id){
+  return (DATA.sessions||[]).find(s=>s && s.id===id) || null;
+}
+function warmupsForSession(session){
+  if(!session) return [];
+  if(Array.isArray(session.warmups)) return clone(session.warmups);
+  return suggestWarmupsForExercises(session.exercises || []);
 }
 
 /* Presets every install gets. Deleting one records its id in
@@ -634,8 +729,9 @@ function defaultSettings(){
     spotter:defaultSpotterSettings(),
     restDefaultMinutes:3, restNotify:true, restSound:'default', restVibrate:true, restAutoStart:true, keepScreenOn:true, fullscreen:true,
     restSetupAsked:false, restBatteryHintDismissed:false,
-    weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], presetsVersion:0,
-    defaultPlanSets:2, onboarded:false, gender:'unspecified', weightedBwMigrated:true };
+    weighInDay:'mon', weightReminderSnoozedOn:null, dismissedPresets:[], dismissedSessions:[], presetsVersion:0,
+    defaultPlanSets:2, onboarded:false, gender:'unspecified', weightedBwMigrated:true, muscleTagsV2:true, gearWarmupsSwept:true,
+    badgesSeen:{}, badgesSeenSeeded:false };
 }
 const GENDERS = ['unspecified','male','female'];
 function defaultSplits(exercises){ return { main: buildGodsPlanSplit(exercises) }; }
@@ -643,9 +739,10 @@ function defaultData(){
   const exercises = seedExercises();
   const data = {
     settings:defaultSettings(), exercises, warmupLibrary:seedWarmupLibrary(),
-    splits:defaultSplits(exercises), activeSplit:'main', logs:[], progress:{}, bodyWeight:[], presets:[]
+    splits:defaultSplits(exercises), activeSplit:'main', logs:[], progress:{}, bodyWeight:[], presets:[], sessions:[]
   };
   ensureBuiltinPresets(data);
+  ensureBuiltinSessions(data);
   linkActivePreset(data);
   return data;
 }
@@ -695,8 +792,11 @@ function migrate(data){
   if(!Array.isArray(s.dismissedPresets)) s.dismissedPresets = [];
   if(s.dismissedGodsPlan && !s.dismissedPresets.includes('builtin-gods-plan')) s.dismissedPresets.push('builtin-gods-plan');
   delete s.dismissedGodsPlan;
+  if(!Array.isArray(s.dismissedSessions)) s.dismissedSessions = [];
   if(typeof s.presetsVersion !== 'number') s.presetsVersion = 0;
   if(typeof s.defaultPlanSets !== 'number' || s.defaultPlanSets<1 || s.defaultPlanSets>8) s.defaultPlanSets = 2;
+  if(typeof s.badgesSeen !== 'object' || !s.badgesSeen || Array.isArray(s.badgesSeen)) s.badgesSeen = {};
+  if(typeof s.badgesSeenSeeded !== 'boolean') s.badgesSeenSeeded = false;
   ensureSpotterSettings(s);
 
   if(!Array.isArray(data.bodyWeight)) data.bodyWeight = [];
@@ -710,7 +810,7 @@ function migrate(data){
   data.exercises.forEach(e=>{
     const meta = CATALOG_BY_NAME[(e.name||'').trim().toLowerCase()];
     if(e.metaVersion !== 2){
-      const legacyEquipment = (e.equipment||'').trim();
+      const legacyEquipment = String(e.equipment||'').trim();
       if(meta){
         e.primary = meta.primary; e.secondary = meta.secondary.slice();
         e.pattern = meta.pattern; e.tier = meta.tier; e.popularity = meta.popularity;
@@ -767,30 +867,70 @@ function migrate(data){
   });
   CATALOG.forEach(c=>{ if(!known.has(c.name.toLowerCase())) data.exercises.push(makeExercise(c)); });
 
+  /* Obliques / Neck tags: retag catalog moves once. A user-edited primary stays. */
+  if(!data.settings.muscleTagsV2){
+    const RETAG_PRIMARY = new Set(['russian twist','side plank','cable woodchop']);
+    const ADD_SECONDARY = {
+      'hanging leg raise':'Obliques',
+      'mountain climber':'Obliques',
+      'shrug':'Neck',
+      'barbell shrug':'Neck'
+    };
+    data.exercises.forEach(e=>{
+      const key = String(e.catalogKey || e.name || '').trim().toLowerCase();
+      const meta = CATALOG_BY_NAME[key];
+      if(!meta) return;
+      if(RETAG_PRIMARY.has(key) && e.primary==='Abs'){
+        e.primary = meta.primary;
+        e.secondary = meta.secondary.slice();
+        e.muscleGroup = e.primary;
+      }
+      const add = ADD_SECONDARY[key];
+      if(add){
+        if(!Array.isArray(e.secondary)) e.secondary = [];
+        if(!e.secondary.includes(add) && e.primary!==add) e.secondary.push(add);
+      }
+    });
+    data.settings.muscleTagsV2 = true;
+  }
+
+  /* Old builds seeded warm-ups that need gear. Swap those out once; after that a
+     user's own warm-up that mentions a band or machine is left alone. */
+  const sweepGear = !s.gearWarmupsSwept;
+  const migrateDayRows = (day)=>{
+    if(!Array.isArray(day.exercises)) day.exercises = [];
+    day.exercises = day.exercises.filter(row=> row && typeof row==='object');
+    day.exercises.forEach(row=>{
+      if(typeof row.rpe === 'undefined') row.rpe = null;
+      if(typeof row.notes !== 'string') row.notes = '';
+      upgradeWarmupNote(row);
+      if(!row.sets) row.sets = 3;
+      if(!row.repsMin) row.repsMin = 8;
+      if(!row.repsMax) row.repsMax = 12;
+      if(typeof row.restSeconds === 'undefined') row.restSeconds = null; // null = use the global default
+      if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
+      if(typeof row.supersetId === 'undefined') row.supersetId = null;
+      if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
+      ensureRowEquipment(row);
+    });
+    ensureDayWarmups(day, data.exercises, true, sweepGear);
+  };
+
   /* split rows */
   Object.values(data.splits).forEach(split=>{
+    if(!split.days || typeof split.days!=='object') split.days = {};
     DAY_KEYS.forEach(dk=>{
       if(!split.days[dk]) split.days[dk] = {name:'Rest', exercises:[], warmups:[]};
-      if(!Array.isArray(split.days[dk].exercises)) split.days[dk].exercises = [];
-      split.days[dk].exercises.forEach(row=>{
-        if(typeof row.rpe === 'undefined') row.rpe = null;
-        if(typeof row.notes !== 'string') row.notes = '';
-        upgradeWarmupNote(row);
-        if(!row.sets) row.sets = 3;
-        if(!row.repsMin) row.repsMin = 8;
-        if(!row.repsMax) row.repsMax = 12;
-        if(typeof row.restSeconds === 'undefined') row.restSeconds = null; // null = use the global default
-        if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
-        if(typeof row.supersetId === 'undefined') row.supersetId = null;
-        if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
-        ensureRowEquipment(row);
-      });
-      ensureDayWarmups(split.days[dk], data.exercises, true);
+      migrateDayRows(split.days[dk]);
     });
   });
 
   /* logs + sets */
+  if(!Array.isArray(data.logs)) data.logs = [];
+  data.logs = data.logs.filter(log=> log && typeof log==='object');
   data.logs.forEach(log=>{
+    if(!Array.isArray(log.sets)) log.sets = [];
+    log.sets = log.sets.filter(set=> set && typeof set==='object');
     log.sets.forEach(set=>{
       if(typeof set.difficulty === 'number') set.difficulty = set.difficulty<=4?'easy':(set.difficulty<=7?'med':'hard');
       if(typeof set.isPR !== 'boolean') set.isPR = false;
@@ -812,6 +952,9 @@ function migrate(data){
     if(typeof log.plan === 'undefined') log.plan = null;
     if(typeof log.planName !== 'string') log.planName = '';
     if(typeof log.customSession !== 'boolean') log.customSession = false;
+    if(log.sessionKind==='fullbody' && !log.sessionId) log.sessionId = 'builtin-fullbody';
+    delete log.sessionKind;
+    if(typeof log.sessionId !== 'string' || !log.sessionId) log.sessionId = null;
     if(!Array.isArray(log.queued)) log.queued = [];
     else log.queued = log.queued.filter(row=>row && row.exerciseId);
     if(!Array.isArray(log.hiddenExerciseIds)) log.hiddenExerciseIds = [];
@@ -825,9 +968,11 @@ function migrate(data){
       ensureRowEquipment(row);
     });
     if(Array.isArray(log.warmups)){
-      const hadGear = log.warmups.some(warmupNeedsGear);
-      log.warmups = replaceGearWarmups(log.warmups, true);
-      if(hadGear) log.warmupDone = [];
+      if(sweepGear){
+        const hadGear = log.warmups.some(warmupNeedsGear);
+        log.warmups = replaceGearWarmups(log.warmups, true);
+        if(hadGear) log.warmupDone = [];
+      } else log.warmups = log.warmups.map(normalizeWarmupRow).filter(Boolean);
     } else log.warmups = null;
     if(!Array.isArray(log.warmupDone)) log.warmupDone = [];
     log.queued.forEach(row=>{
@@ -839,57 +984,69 @@ function migrate(data){
   (data.presets||[]).forEach(p=>{
     if(!p.split || !p.split.days) return;
     DAY_KEYS.forEach(dk=>{
-      if(!p.split.days[dk]) return;
-      if(!Array.isArray(p.split.days[dk].exercises)) p.split.days[dk].exercises = [];
-      (p.split.days[dk].exercises || []).forEach(row=>{
-        if(typeof row.rpe === 'undefined') row.rpe = null;
-        if(typeof row.notes !== 'string') row.notes = '';
-        upgradeWarmupNote(row);
-        if(!row.sets) row.sets = 3;
-        if(!row.repsMin) row.repsMin = 8;
-        if(!row.repsMax) row.repsMax = 12;
-        if(typeof row.restSeconds === 'undefined') row.restSeconds = null;
-        if(typeof row.loadStep !== 'number' || !(row.loadStep > 0)) row.loadStep = null;
-        if(typeof row.supersetId === 'undefined') row.supersetId = null;
-        if(typeof row.oftenDoneAsDropSet !== 'boolean') row.oftenDoneAsDropSet = false;
-        ensureRowEquipment(row);
-      });
-      ensureDayWarmups(p.split.days[dk], data.exercises, true);
+      if(p.split.days[dk]) migrateDayRows(p.split.days[dk]);
     });
   });
+  s.gearWarmupsSwept = true;
   collapseToSingleSplit(data);
   ensureBuiltinPresets(data);
+  ensureBuiltinSessions(data);
   fixGenericTreadmillRows(data);
   linkActivePreset(data);
   return data;
 }
 
+/* While loadData() runs, DATA is not assigned yet and reading it throws.
+   Helpers that migrate() reaches read the save being migrated through this instead. */
+function liveData(){ return dataReady ? DATA : loadingData; }
+function parseAndMigrate(text, what){
+  const parsed = JSON.parse(text);
+  if(!parsed || !parsed.exercises) throw new Error(what+' unrecognised');
+  loadingData = parsed;
+  try{ return migrate(parsed); }
+  finally{ loadingData = null; }
+}
+function hasLoggedWork(data){
+  return Array.isArray(data && data.logs) && data.logs.some(l=> l && Array.isArray(l.sets) && l.sets.length);
+}
+/* A launch that could not read the save parks it under _broken. Bring it back on a
+   later launch if it now loads and the current save has no workouts of its own. */
+function recoverBrokenSave(current){
+  const broken = localStorage.getItem(STORAGE_KEY+'_broken');
+  if(!broken || hasLoggedWork(current)) return current;
+  try{
+    const recovered = parseAndMigrate(broken, 'parked save');
+    if(!hasLoggedWork(recovered)) return current;
+    localStorage.removeItem(STORAGE_KEY+'_broken');
+    setTimeout(()=> showToast('Recovered your saved workouts'), 400);
+    return recovered;
+  }catch(err){
+    console.error(APP_NAME+': parked save still unreadable', err);
+    return current;
+  }
+}
 function loadData(){
   const raw = localStorage.getItem(STORAGE_KEY);
-  if(!raw){ const fresh = defaultData(); saveData(fresh); return fresh; }
-  const stashBroken = ()=>{ try{ localStorage.setItem(STORAGE_KEY+'_broken', raw); }catch(e){} };
-  try{
-    const parsed = JSON.parse(raw);
-    if(!parsed.exercises) throw new Error('unrecognised save shape');
-    const migrated = migrate(parsed);
-    saveData(migrated);
-    return migrated;
-  }catch(err){
-    console.error(APP_NAME+': storage read failed', err);
-    stashBroken();
-    const bak = localStorage.getItem(STORAGE_KEY+'_bak');
-    if(bak && bak!==raw){
-      try{
-        const parsed = JSON.parse(bak);
-        if(!parsed.exercises) throw new Error('backup unrecognised');
-        const recovered = migrate(parsed);
-        saveData(recovered);
-        setTimeout(()=> showToast('Restored from backup after a save error'), 400);
-        return recovered;
-      }catch(err2){ console.error(APP_NAME+': backup restore failed', err2); }
+  let data = null, justParked = false;
+  if(raw){
+    try{ data = parseAndMigrate(raw, 'save'); }
+    catch(err){
+      console.error(APP_NAME+': storage read failed', err);
+      try{ localStorage.setItem(STORAGE_KEY+'_broken', raw); justParked = true; }catch(e){}
+      const bak = localStorage.getItem(STORAGE_KEY+'_bak');
+      if(bak && bak!==raw){
+        try{
+          data = parseAndMigrate(bak, 'backup');
+          setTimeout(()=> showToast('Restored from backup after a save error'), 400);
+        }catch(err2){ console.error(APP_NAME+': backup restore failed', err2); }
+      }
+      if(!data) setTimeout(()=> showToast('Could not read your saved data. A copy was kept to recover later.'), 400);
     }
-    const fresh = defaultData(); saveData(fresh); return fresh;
   }
+  if(!data) data = defaultData();
+  if(!justParked) data = recoverBrokenSave(data);
+  saveData(data);
+  return data;
 }
 function saveData(data){
   if(dataReady) captureActiveWorkoutElapsed();
@@ -902,13 +1059,17 @@ function saveData(data){
     }
     localStorage.setItem(STORAGE_KEY, next);
   }
-  catch(err){ console.error(APP_NAME+': storage write failed', err); showToast('Could not save — storage unavailable'); }
+  catch(err){
+    console.error(APP_NAME+': storage write failed', err);
+    if(typeof showToast==='function') showToast('Could not save — storage unavailable');
+  }
 }
 
 /* Derived index: exerciseId → all logged sets (each carrying its date), oldest first.
    Declared before DATA because saveData() invalidates it. Rebuilt lazily. */
 let setIndex = null;
 let dataReady = false;
+let loadingData = null;
 let DATA = loadData();
 dataReady = true;
 /* Older builds seeded sample workouts (ids "demo-<date>") and weigh-ins

@@ -1,14 +1,15 @@
 {
-    "version":  "1.7.0",
-    "build":  8,
-    "date":  "2026-11-02",
+    "version":  "1.8.0",
+    "build":  9,
+    "date":  "2026-11-04",
     "apk":  "downloads/TrackAgain.apk",
-    "apkSize":  4885971,
+    "apkSize":  4816174,
+    "sha256":  "d7f8875ca086232c7893b11a6c622419f3877d0ff5112700638a5108beec8ade",
     "notes":  "downloads/",
     "highlights":  [
-                       "Stats replaces Records",
-                       "Bottom sheets slide open and closed a bit softer, without a fade on the card",
-                       "Opening a History sheet (Days in the gym, a recent workout) no longer jumps the page back to the top on phone",
-                       "Create a preset, or save this week onto another"
+                       "Update from inside the app",
+                       "Badges are medallions with a progress ring and a shelf you can browse by ladder",
+                       "Your workouts no longer vanish after an update or restart",
+                       "Focus next"
                    ]
 }

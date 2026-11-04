@@ -1298,112 +1298,6 @@ function spotterCardView(planRow, log, doneSets){
   msg.planKind = plan.kind;
   return msg;
 }
-function spotterNameBit(){
-  const n = (DATA && DATA.settings && DATA.settings.userName || '').trim();
-  if(!n || n.toLowerCase()==='user') return '';
-  return ', '+n;
-}
-function spotterCountWord(n){
-  const words = ['zero','one','two','three','four','five','six','seven','eight','nine','ten'];
-  n = Math.round(Number(n)||0);
-  return n>=0 && n<words.length ? words[n] : String(n);
-}
-function spotterWeekStats(){
-  const now = new Date(); now.setHours(0,0,0,0);
-  const sinceMon = (now.getDay()+6) % 7;
-  const start = new Date(now); start.setDate(now.getDate()-sinceMon);
-  const end = new Date(start); end.setDate(start.getDate()+7);
-  const startKey = dateKey(start), endKey = dateKey(end), today = dateKey(now);
-  const days = splitDays();
-  let m = 0, n = 0;
-  DAY_ORDER.forEach(dk=>{
-    const day = days[dk];
-    if(!day || !(day.exercises||[]).length) return;
-    m++;
-    const hit = (DATA.logs||[]).some(l => l && l.date>=startKey && l.date<endKey && l.dayKey===dk && (l.sets||[]).length);
-    if(hit) n++;
-  });
-  if(!m){
-    const from = new Date(now); from.setDate(now.getDate()-6);
-    const fromKey = dateKey(from);
-    const dates = new Set();
-    (DATA.logs||[]).forEach(l=>{ if(l && l.date>=fromKey && l.date<=today && (l.sets||[]).length) dates.add(l.date); });
-    return {n: dates.size, m: 0, chip: dates.size+' this week'};
-  }
-  return {n, m, chip: n+' of '+m+' this week'};
-}
-function spotterDaysSinceWorkout(today){
-  let best = null;
-  (DATA.logs||[]).forEach(l=>{
-    if(!l || !l.date || l.date>=today || !(l.sets||[]).length) return;
-    if(!best || l.date>best) best = l.date;
-  });
-  return best ? spotterGapDays(best, today) : null;
-}
-function spotterOneOff(exerciseId, hist){
-  const last = hist && hist[0];
-  if(!last) return null;
-  let best = 0, any = false;
-  hist.forEach(s=>{
-    if(!spotterSameWeight(s.W, last.W)) return;
-    (s.sets||[]).forEach(set=>{ if(set.reps>best){ best = set.reps; any = true; } });
-  });
-  if(!any) return null;
-  const lastBest = (last.sets||[]).reduce((m,s)=> Math.max(m, s.reps), 0);
-  return best-lastBest===1 ? {weight: last.W} : null;
-}
-function spotterWatchLine(rows){
-  const bumps = [], near = [], adds = [];
-  const todayLogId = (typeof todayLog==='function' && todayLog().id) || null;
-  (rows||[]).forEach(row=>{
-    const ex = getExercise(row.exerciseId);
-    if(!ex || !spotterUsesEngine(ex)) return;
-    const hist = spotterHistory(row.exerciseId).filter(s => s.id!==todayLogId && s.date<todayKey());
-    const plan = spotterStartPlan(hist, Math.max(1, row.sets||1), spotterRepRange(row, ex), spotterJumpFor(ex, row), todayKey(), {bodyweight: spotterBwMode(ex)});
-    const short = String(ex.name||'').split(' ')[0] || 'Lift';
-    if(plan.kind==='BUMP'){
-      bumps.push(plan.bodyweightBump ? (short+' can take a harder variation') : (short+' is one clean session from '+spotterNum(plan.weight)));
-    } else {
-      const off = spotterOneOff(row.exerciseId, hist);
-      if(off) near.push(short+' is 1 rep off '+spotterNum(off.weight));
-      else if(plan.kind==='ADD_REPS') adds.push(short+', one more rep');
-    }
-  });
-  const items = bumps.concat(near, adds).slice(0, 2);
-  if(!items.length) return 'Keep the sets honest.';
-  let line = items.join('. ');
-  if(!/[.!?]$/.test(line)) line += '.';
-  return spotterClip(line, 64);
-}
-function spotterGreeting(log, planRows){
-  const today = todayKey();
-  const anyLog = (DATA.logs||[]).some(l => l && (l.sets||[]).length);
-  const trainedToday = (DATA.logs||[]).some(l => l && l.date===today && (l.sets||[]).length);
-  const session = (log && planNameForLog(log)) || 'Workout';
-  const count = (planRows||[]).length;
-  const week = spotterWeekStats();
-  const gap = spotterDaysSinceWorkout(today);
-  const hour = new Date().getHours();
-  let type = 'GREET_MORNING';
-  if(!anyLog) type = 'GREET_FIRST_EVER';
-  else if(week.m>0 && week.n>=week.m && trainedToday) type = 'GREET_WEEK_COMPLETE';
-  else if(trainedToday) type = 'GREET_ALREADY_DONE';
-  else if(!count) type = 'GREET_REST_DAY';
-  else if(gap!=null && gap>=14) type = 'GREET_BACK_LONG';
-  else if(gap!=null && gap>=4 && gap<=7) type = 'GREET_BACK_SHORT';
-  else if(hour>=5 && hour<=11) type = 'GREET_MORNING';
-  else if(hour>=12 && hour<=16) type = 'GREET_AFTERNOON';
-  else if(hour>=17 && hour<=21) type = 'GREET_EVENING';
-  else type = 'GREET_LATE';
-  const tokens = {
-    name: spotterNameBit(),
-    session, count: spotterCountWord(count),
-    watch: type==='GREET_FIRST_EVER' ? '' : spotterWatchLine(planRows),
-    n: String(week.n), m: String(week.m)
-  };
-  const msg = spotterPresent(type, tokens, {key: 'greet:'+today+':'+type+':'+tokens.watch, logId: log && log.id, exerciseId: 'home'});
-  return {line1: msg.headline || spotterClip(spotterFill(SPOTTER_COPY[type][0].h, tokens), 36), line2: msg.numbers, chip: week.chip, level: msg.level, type};
-}
 function spotterWorkoutSummary(log){
   if(!log) return null;
   const seen = [];
@@ -1526,11 +1420,6 @@ function setPerformanceScore(set, metric){
 function repRangeFor(reps){
   return TRAINING.repRanges.find(r=>reps<=r.maxReps) || TRAINING.repRanges[TRAINING.repRanges.length-1];
 }
-function isLowRepSet(set, metric){
-  // Warm-ups are exempt: fewer than the working-set floor is normal while ramping up.
-  if(!set || set.isWarmup) return false;
-  return hasLoadField(metric) && (set.reps||0) > 0 && set.reps < TRAINING.lowRepWarningBelow;
-}
 function effectiveSetsFor(set, exercise){
   if(set.isWarmup || holdInProgress(set)) return 0;
   const metric = metricOf(exercise);
@@ -1642,10 +1531,6 @@ function sessionSeriesForExercise(exerciseId){
   });
   return [...byDate.values()].sort((a,b)=> a.date.localeCompare(b.date));
 }
-function exercisesWithPrs(muscle){
-  return DATA.exercises.filter(e=>primaryOf(e)===muscle && prMomentsForExercise(e.id).length).sort(compareExercises);
-}
-function appHasAnyPrs(){ return DATA.exercises.some(e=>prMomentsForExercise(e.id).length>0); }
 
 /* --- progressive overload ---------------------------------------------
    Gradual by design: you must repeat a qualifying session before the app
@@ -1674,9 +1559,6 @@ function loadStepFor(exercise, planRow){
   if(step > 0) return step;
   if(TRAINING.load.minIncrementKg > 0) return TRAINING.load.minIncrementKg;
   return TRAINING.load.plateStepKg || 2.5;
-}
-function roundToPlate(weight, step){
-  return snapLoad(weight, step > 0 ? step : TRAINING.load.plateStepKg);
 }
 function nextLoadFor(exercise, currentWeight, planRow){
   const pct = LOWER_BODY_MUSCLES.has(primaryOf(exercise)) ? TRAINING.load.increasePctLower : TRAINING.load.increasePctUpper;
@@ -2351,22 +2233,28 @@ function sessionDurationMs(log){
 const MUSCLE_TO_SLUG = {
   'Chest':'chest', 'Shoulders':'deltoids', 'Rear Delts':'deltoids',
   'Triceps':'triceps', 'Lats':'upper-back', 'Upper Back':'upper-back',
-  'Biceps':'biceps', 'Forearms':'forearm', 'Quads':'quadriceps',
+  'Neck':'neck', 'Biceps':'biceps', 'Forearms':'forearm', 'Quads':'quadriceps',
   'Hamstrings':'hamstring', 'Glutes':'gluteal', 'Calves':'calves',
-  'Abs':'abs', 'Lower Back':'lower-back'
+  'Abs':'abs', 'Obliques':'obliques', 'Lower Back':'lower-back'
 };
 const SLUG_LABEL = {
   chest:'Chest', deltoids:'Shoulders', triceps:'Triceps', 'upper-back':'Upper Back',
-  biceps:'Biceps', forearm:'Forearms', quadriceps:'Quads', hamstring:'Hamstrings',
-  gluteal:'Glutes', calves:'Calves', abs:'Abs', 'lower-back':'Lower Back'
+  neck:'Neck', biceps:'Biceps', forearm:'Forearms', quadriceps:'Quads', hamstring:'Hamstrings',
+  gluteal:'Glutes', calves:'Calves', abs:'Abs', obliques:'Obliques', 'lower-back':'Lower Back'
 };
 const SLUG_MUSCLES = {
   chest:['Chest'], deltoids:['Shoulders','Rear Delts'], triceps:['Triceps'],
-  'upper-back':['Upper Back','Lats'], biceps:['Biceps'], forearm:['Forearms'],
+  'upper-back':['Upper Back','Lats'], neck:['Neck'], biceps:['Biceps'], forearm:['Forearms'],
   quadriceps:['Quads'], hamstring:['Hamstrings'], gluteal:['Glutes'],
-  calves:['Calves'], abs:['Abs'], 'lower-back':['Lower Back']
+  calves:['Calves'], abs:['Abs'], obliques:['Obliques'], 'lower-back':['Lower Back']
+};
+/* Drawn regions that open another muscle's detail. */
+const SLUG_ALIAS = {
+  trapezius:'upper-back', serratus:'obliques', 'hip-flexors':'abs',
+  tibialis:'calves', adductors:'gluteal'
 };
 const CLICKABLE_SLUGS = Object.keys(SLUG_MUSCLES);
+function canonicalSlug(slug){ return SLUG_ALIAS[slug] || slug; }
 function musclesForSlug(slug){ return SLUG_MUSCLES[slug] || []; }
 function labelForSlug(slug){ return SLUG_LABEL[slug] || slug; }
 function slugForMuscle(muscle){ return MUSCLE_TO_SLUG[muscle] || null; }
@@ -2382,27 +2270,6 @@ function setsInDateRange(fromKey, toKey){
 function daysAgoKey(n){
   const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-n);
   return dateKey(d);
-}
-/* Effective sets per map slug over the last 30 days (secondary muscles share). */
-function statsMuscleLoad30d(){
-  const work = muscleWorkForSets(setsInDateRange(daysAgoKey(29), todayKey()));
-  const load = {};
-  work.forEach(row=>{
-    const slug = slugForMuscle(row.muscle);
-    if(!slug) return;
-    load[slug] = (load[slug]||0) + row.effectiveSets;
-  });
-  return load;
-}
-function bodyMapLevels(load){
-  const vals = Object.values(load).filter(v=>v>0);
-  const max = vals.length ? Math.max(...vals) : 0;
-  const levels = {};
-  (typeof BODY_MAP_MUSCLES!=='undefined' ? BODY_MAP_MUSCLES : CLICKABLE_SLUGS).forEach(slug=>{
-    const v = load[slug]||0;
-    levels[slug] = !max || !v ? 0 : Math.min(4, Math.max(1, Math.ceil(v/max*4)));
-  });
-  return levels;
 }
 /* Primary muscles on today's plan → map slugs to outline. */
 function todayPlanSlugs(){
@@ -2433,54 +2300,6 @@ function totalPrMomentCount(){
 }
 function strengthClimbCount(){
   return DATA.exercises.filter(exerciseHasPositiveGain).length;
-}
-const PR_HUNTER_BADGES = [
-  {need:1,   name:'First spark',   hint:'Log your first PR'},
-  {need:5,   name:'Hot streak',    hint:'5 PRs'},
-  {need:10,  name:'Ten trophies',  hint:'10 PRs'},
-  {need:25,  name:'Quarter century', hint:'25 PRs'},
-  {need:50,  name:'Half hundred',  hint:'50 PRs'},
-  {need:100, name:'Century club',  hint:'100 PRs'}
-];
-const STRENGTH_CLIMB_BADGES = [
-  {need:1,  name:'On the board',  hint:'1 lift climbing'},
-  {need:3,  name:'Three up',      hint:'3 lifts climbing'},
-  {need:5,  name:'Solid climb',   hint:'5 lifts climbing'},
-  {need:10, name:'Strong climb',  hint:'10 lifts climbing'},
-  {need:20, name:'All-rounder',   hint:'20 lifts climbing'}
-];
-function statsBadges(){
-  const prs = totalPrMomentCount();
-  const climb = strengthClimbCount();
-  const ladder = (defs, count)=> defs.map(b=>({...b, earned: count>=b.need, count}));
-  return {
-    prCount: prs,
-    climbCount: climb,
-    prHunter: ladder(PR_HUNTER_BADGES, prs),
-    strengthClimb: ladder(STRENGTH_CLIMB_BADGES, climb)
-  };
-}
-/* Highest earned PR-hunter badge, or the locked first step. */
-function currentStatsBadge(){
-  const prs = totalPrMomentCount();
-  let earned = null;
-  PR_HUNTER_BADGES.forEach(b=>{ if(prs >= b.need) earned = b; });
-  if(earned){
-    return {
-      ...earned, earned:true, count:prs,
-      why:`You locked this at ${earned.need} personal record${earned.need===1?'':'s'}. You’ve got ${prs} now.`,
-      progressLabel:`${prs} PR${prs===1?'':'s'}`
-    };
-  }
-  const first = PR_HUNTER_BADGES[0];
-  return {
-    ...first, earned:false, count:prs,
-    why:`Log your first personal record to unlock ${first.name}. You’re at ${prs} so far.`,
-    progressLabel:'Tap for progress'
-  };
-}
-function nextBadgesAfter(ladder, count){
-  return ladder.filter(b=> count < b.need);
 }
 function lifetimeVolumeKg(){
   let total = 0;
@@ -2626,51 +2445,456 @@ function volumeStoryFact(kg){
     line:`You've lifted ${tonnesText} tonne${tonnesText==='1'?'':'s'}, about ${count} ${label}.`
   };
 }
-function muscleProgressScore(muscles){
-  const trained = exercisesWithPrsForMuscles(muscles);
-  if(!trained.length) return 0;
-  let sum = 0, n = 0;
-  trained.forEach(ex=>{
-    const moments = prMomentsForExercise(ex.id);
-    if(moments.length < 2){ n++; return; }
-    const first = moments[0].score, last = moments[moments.length-1].score;
-    if(!first){ n++; return; }
-    const metric = metricOf(ex);
-    const gain = betterIsHigher(metric) ? (last-first)/Math.abs(first) : (first-last)/Math.abs(first);
-    sum += Math.max(0, gain);
-    n++;
-  });
-  return n ? sum/n : 0;
+/* --- Focus next: one useful thing to fix --- */
+function focusTargetForMuscle(muscle){
+  const map = (TRAINING.focusTargets && TRAINING.focusTargets.byMuscle) || {};
+  if(typeof map[muscle]==='number') return map[muscle];
+  return (TRAINING.focusTargets && TRAINING.focusTargets.default) || TRAINING.weeklyEffectiveSetTarget || 12;
 }
-function statsWeakestLink(){
-  const load = statsMuscleLoad30d();
-  const trainedPrimaries = new Set();
-  (DATA.logs||[]).forEach(log=> (log.sets||[]).forEach(s=>{
-    const ex = getExercise(s.exerciseId);
-    if(ex) trainedPrimaries.add(primaryOf(ex));
-  }));
-  const candidates = CLICKABLE_SLUGS.map(slug=>{
-    const muscles = musclesForSlug(slug);
-    const sets = load[slug]||0;
-    const progress = muscleProgressScore(muscles);
-    const hasHistory = sets>0 || muscles.some(m=>trainedPrimaries.has(m))
-      || exercisesWithPrsForMuscles(muscles).length>0;
-    return {slug, muscles, label:labelForSlug(slug), sets, progress, hasHistory};
-  }).filter(c=> c.hasHistory);
-  if(!candidates.length) return null;
-  const bySets = [...candidates].sort((a,b)=> a.sets-b.sets);
-  const byProg = [...candidates].sort((a,b)=> a.progress-b.progress);
-  const rank = {};
-  bySets.forEach((c,i)=>{ rank[c.slug] = (rank[c.slug]||0) + i; });
-  byProg.forEach((c,i)=>{ rank[c.slug] = (rank[c.slug]||0) + i; });
-  candidates.sort((a,b)=> (rank[a.slug]-rank[b.slug]) || (a.sets-b.sets) || (a.progress-b.progress));
-  const weak = candidates[0];
-  return {
-    slug: weak.slug,
-    label: weak.label,
-    muscles: weak.muscles,
-    line:`Weakest link: ${weak.label}. Fewest hard sets and the softest climb — train this next.`
+function focusRelevantMuscles(){
+  const onSplit = new Set();
+  const days = typeof splitDays==='function' ? splitDays() : {};
+  Object.values(days).forEach(day=>{
+    (day.exercises||[]).forEach(row=>{
+      const ex = getExercise(row.exerciseId);
+      if(ex) onSplit.add(primaryOf(ex));
+    });
+  });
+  const recent = new Set();
+  const from = daysAgoKey(55);
+  (DATA.logs||[]).forEach(log=>{
+    if(log.date < from) return;
+    (log.sets||[]).forEach(s=>{
+      const ex = getExercise(s.exerciseId);
+      if(ex) recent.add(primaryOf(ex));
+    });
+  });
+  return {onSplit, relevant: new Set([...onSplit, ...recent])};
+}
+function lastTrainedDateForMuscle(muscle){
+  let last = null;
+  (DATA.logs||[]).forEach(log=>{
+    (log.sets||[]).forEach(s=>{
+      const ex = getExercise(s.exerciseId); if(!ex) return;
+      const hit = primaryOf(ex)===muscle || (secondaryOf(ex)||[]).includes(muscle);
+      if(hit && (!last || log.date>last)) last = log.date;
+    });
+  });
+  return last;
+}
+/* Average weekly effective sets over the last 4 weeks, keyed by muscle name. */
+function muscleWeeklyAvg4w(){
+  const totals = {};
+  for(let w=0; w<4; w++){
+    const to = w===0 ? todayKey() : daysAgoKey(w*7);
+    const from = daysAgoKey(w*7+6);
+    muscleWorkForSets(setsInDateRange(from, to)).forEach(row=>{
+      totals[row.muscle] = (totals[row.muscle]||0) + row.effectiveSets;
+    });
+  }
+  const avg = {};
+  Object.keys(totals).forEach(m=>{ avg[m] = totals[m]/4; });
+  return avg;
+}
+function regionSets4w(){
+  const from = daysAgoKey(27);
+  const byRegion = {Push:0, Pull:0, Legs:0, Core:0, Other:0};
+  const byMuscle = {};
+  muscleWorkForSets(setsInDateRange(from, todayKey())).forEach(row=>{
+    byMuscle[row.muscle] = (byMuscle[row.muscle]||0) + row.effectiveSets;
+    const region = MUSCLE_REGION[row.muscle] || 'Other';
+    byRegion[region] = (byRegion[region]||0) + row.effectiveSets;
+  });
+  return {byRegion, byMuscle};
+}
+const FOCUS_KIND_ORDER = {neglected:0, under:1, stalled:2, imbalance:3};
+function statsFocusNext(){
+  const logs = (DATA.logs||[]).filter(l=>l.sets && l.sets.length);
+  const dates = logs.map(l=>l.date).sort();
+  if(logs.length < 3 || !dates.length || daysInclusive(dates[0], todayKey()) < 14){
+    return {
+      kind:'empty', title:'Not enough history yet',
+      line:'Log a few more sessions — Focus next picks the one thing worth fixing.',
+      action:null
+    };
+  }
+  const {onSplit, relevant} = focusRelevantMuscles();
+  const candidates = [];
+  const push = (item)=>{ if(item && item.severity >= 0.25) candidates.push(item); };
+
+  // Neglected: on-split muscles quiet for 10+ days (or never).
+  onSplit.forEach(muscle=>{
+    if(muscle==='Other') return;
+    const last = lastTrainedDateForMuscle(muscle);
+    const days = last==null ? 999 : Math.max(0, daysInclusive(last, todayKey())-1);
+    if(last!=null && days < 10) return;
+    const severity = last==null ? 1 : Math.min(1, 0.35 + (days-10)/20);
+    const slug = slugForMuscle(muscle);
+    push({
+      kind:'neglected', severity, slug, muscle,
+      title: muscle,
+      line: last==null
+        ? `${muscle}: on your split, but never trained.`
+        : `${muscle}: last trained ${days} day${days===1?'':'s'} ago.`,
+      action: slug ? {label:`See ${labelForSlug(slug)}`, slug} : null
+    });
+  });
+
+  // Under target: 4-week weekly average below 60% of that muscle's target.
+  const weekly = muscleWeeklyAvg4w();
+  relevant.forEach(muscle=>{
+    if(muscle==='Other') return;
+    const target = focusTargetForMuscle(muscle);
+    const avg = weekly[muscle]||0;
+    if(avg >= target*0.6) return;
+    const ratio = target>0 ? avg/target : 0;
+    const severity = Math.min(1, 1 - ratio);
+    const shown = Math.round(avg*10)/10;
+    const slug = slugForMuscle(muscle);
+    push({
+      kind:'under', severity, slug, muscle,
+      title: muscle,
+      line: `${muscle}: ${shown} of ${target} sets a week.`,
+      progress: {value:avg, target},
+      action: slug ? {label:`See ${labelForSlug(slug)}`, slug} : null
+    });
+  });
+
+  // Stalled lift: trained in last 21 days, 4+ sessions since last PR.
+  (DATA.exercises||[]).forEach(ex=>{
+    const series = sessionSeriesForExercise(ex.id);
+    if(series.length < 4) return;
+    const last = series[series.length-1];
+    if(daysInclusive(last.date, todayKey())-1 > 21) return;
+    const moments = prMomentsForExercise(ex.id);
+    const lastPr = moments.length ? moments[moments.length-1].date : null;
+    const since = lastPr ? series.filter(s=> s.date > lastPr).length : series.length;
+    if(since < 4) return;
+    const severity = Math.min(1, 0.3 + (since-4)*0.12);
+    push({
+      kind:'stalled', severity, exerciseId:ex.id,
+      title: ex.name,
+      line: `${ex.name}: no PR in ${since} sessions. Try a rep range change or a light week.`,
+      action: {label:'See history', exerciseId:ex.id}
+    });
+  });
+
+  // Imbalance: Push vs Pull, Quads vs Hamstrings over 4 weeks.
+  const {byRegion, byMuscle} = regionSets4w();
+  const regionSlug = {Pull:'upper-back', Push:'chest'};
+  const addImbalance = (leftLabel, leftVal, rightLabel, rightVal, tip)=>{
+    if(!(leftVal>0) || !(rightVal>0)) return;
+    const hi = Math.max(leftVal, rightVal), lo = Math.min(leftVal, rightVal);
+    const ratio = hi/lo;
+    if(ratio <= 1.5) return;
+    const weakIsLeft = leftVal < rightVal;
+    const weak = weakIsLeft ? leftLabel : rightLabel;
+    const strong = weakIsLeft ? rightLabel : leftLabel;
+    const severity = Math.min(1, (ratio-1.5)/1.5);
+    const frac = Math.round((lo/hi)*10)/10;
+    const slug = slugForMuscle(weak) || regionSlug[weak] || null;
+    const actionLabel = slug ? labelForSlug(slug) : weak;
+    push({
+      kind:'imbalance', severity, slug,
+      title: `${weak} vs ${strong}`,
+      line: `${weak} is about ${frac===0.5?'half':(frac+'×')} of ${strong}. ${tip}`,
+      action: slug ? {label:`See ${actionLabel}`, slug} : null
+    });
   };
+  addImbalance('Pull', byRegion.Pull||0, 'Push', byRegion.Push||0, 'Add a row.');
+  addImbalance('Hamstrings', byMuscle['Hamstrings']||0, 'Quads', byMuscle['Quads']||0, 'Add a hinge or curl.');
+
+  if(!candidates.length){
+    return {
+      kind:'balanced', title:'All balanced',
+      line:'Every muscle on your split got its sets in the last 4 weeks.',
+      action:null
+    };
+  }
+  candidates.sort((a,b)=>
+    b.severity - a.severity ||
+    FOCUS_KIND_ORDER[a.kind] - FOCUS_KIND_ORDER[b.kind] ||
+    (a.title||'').localeCompare(b.title||'')
+  );
+  const top = candidates[0];
+  const also = candidates[1] && candidates[1].severity >= 0.25
+    ? {title:candidates[1].title, line:candidates[1].line}
+    : null;
+  return {
+    kind: top.kind,
+    slug: top.slug || null,
+    exerciseId: top.exerciseId || null,
+    title: top.title,
+    line: top.line,
+    also,
+    progress: top.progress || null,
+    action: top.action || null
+  };
+}
+
+/* --- Badge ladders --- */
+function workoutDayCount(){
+  const dates = new Set();
+  (DATA.logs||[]).forEach(log=>{
+    if(log.sets && log.sets.length && workingSetCount(log.sets)>0) dates.add(log.date);
+  });
+  return dates.size;
+}
+/* Longest training-day streak with the same rules as currentStreakDays. */
+function bestStreakDays(){
+  const trained = new Set();
+  (DATA.logs||[]).forEach(log=>{
+    if(log.sets && log.sets.length) trained.add(log.date);
+  });
+  if(!trained.size) return 0;
+  const dates = [...trained].sort();
+  const cursor = parseDateKey(dates[0]);
+  const end = parseDateKey(todayKey());
+  let best = 0, run = 0;
+  while(cursor <= end){
+    const key = dateKey(cursor);
+    const day = splitDays()[weekdayKey(cursor)];
+    const isRest = !day || !(day.exercises||[]).length;
+    const did = trained.has(key);
+    if(isRest || did){
+      if(did){ run++; if(run>best) best = run; }
+    } else run = 0;
+    cursor.setDate(cursor.getDate()+1);
+  }
+  return best;
+}
+/* Most map muscles hit in any Monday–Sunday week (≥2 effective sets). */
+function bestWeekMuscleCoverage(){
+  const logs = (DATA.logs||[]).filter(l=>l.sets && l.sets.length);
+  if(!logs.length) return 0;
+  const dates = logs.map(l=>l.date).sort();
+  const start = parseDateKey(dates[0]);
+  start.setDate(start.getDate() - ((start.getDay()+6)%7)); // Monday
+  const end = parseDateKey(dates[dates.length-1]);
+  let best = 0;
+  const cursor = new Date(start);
+  let guard = 0;
+  while(cursor <= end && guard < 600){
+    guard++;
+    const weekStart = dateKey(cursor);
+    const weekEndDate = new Date(cursor); weekEndDate.setDate(cursor.getDate()+6);
+    const weekEnd = dateKey(weekEndDate);
+    const load = {};
+    muscleWorkForSets(setsInDateRange(weekStart, weekEnd)).forEach(row=>{
+      const slug = slugForMuscle(row.muscle);
+      if(!slug) return;
+      load[slug] = (load[slug]||0) + row.effectiveSets;
+    });
+    const hit = Object.keys(load).filter(s=> load[s] >= 2).length;
+    if(hit > best) best = hit;
+    cursor.setDate(cursor.getDate()+7);
+  }
+  return best;
+}
+const BADGE_LADDERS = [
+  {
+    id:'pr', title:'PR hunter', iconKey:'trophy', unit:'PR',
+    count:()=> totalPrMomentCount(),
+    steps:[
+      {need:1,   name:'First spark',     hint:'Log your first PR'},
+      {need:5,   name:'Hot streak',      hint:'5 PRs'},
+      {need:10,  name:'Ten trophies',    hint:'10 PRs'},
+      {need:25,  name:'Quarter century', hint:'25 PRs'},
+      {need:50,  name:'Half hundred',    hint:'50 PRs'},
+      {need:100, name:'Century club',    hint:'100 PRs'}
+    ]
+  },
+  {
+    id:'climb', title:'Strength climb', iconKey:'dumbbell', unit:'lift',
+    count:()=> strengthClimbCount(),
+    steps:[
+      {need:1,  name:'On the board',  hint:'1 lift climbing'},
+      {need:3,  name:'Three up',      hint:'3 lifts climbing'},
+      {need:5,  name:'Solid climb',   hint:'5 lifts climbing'},
+      {need:10, name:'Strong climb',  hint:'10 lifts climbing'},
+      {need:20, name:'All-rounder',   hint:'20 lifts climbing'}
+    ]
+  },
+  {
+    id:'streak', title:'Consistency', iconKey:'flame', unit:'day',
+    count:()=> bestStreakDays(),
+    steps:[
+      {need:3,   name:'Warming up',   hint:'3-day streak'},
+      {need:7,   name:'Full week',    hint:'7-day streak'},
+      {need:14,  name:'Fortnight',    hint:'14-day streak'},
+      {need:30,  name:'Month strong', hint:'30-day streak'},
+      {need:60,  name:'Two months',   hint:'60-day streak'},
+      {need:100, name:'Triple digits', hint:'100-day streak'}
+    ]
+  },
+  {
+    id:'tonnes', title:'Volume', iconKey:'stack', unit:'tonne',
+    count:()=> lifetimeVolumeKg()/1000,
+    steps:[
+      {need:1,    name:'First tonne',     hint:'1 tonne lifted'},
+      {need:10,   name:'Ten tonnes',      hint:'10 tonnes'},
+      {need:50,   name:'Heavy hauler',    hint:'50 tonnes'},
+      {need:100,  name:'Hundred club',    hint:'100 tonnes'},
+      {need:250,  name:'Freight train',   hint:'250 tonnes'},
+      {need:500,  name:'Half kilotonne',  hint:'500 tonnes'},
+      {need:1000, name:'Kilotonne',       hint:'1000 tonnes'}
+    ]
+  },
+  {
+    id:'sessions', title:'Sessions', iconKey:'calendar', unit:'session',
+    count:()=> workoutDayCount(),
+    steps:[
+      {need:1,   name:'Day one',      hint:'First gym day'},
+      {need:10,  name:'Regular',      hint:'10 gym days'},
+      {need:25,  name:'Committed',    hint:'25 gym days'},
+      {need:50,  name:'Fifty strong', hint:'50 gym days'},
+      {need:100, name:'Centurion',    hint:'100 gym days'},
+      {need:250, name:'Lifer',        hint:'250 gym days'},
+      {need:500, name:'Legend',       hint:'500 gym days'}
+    ]
+  },
+  {
+    id:'coverage', title:'Coverage', iconKey:'body', unit:'muscle',
+    count:()=> bestWeekMuscleCoverage(),
+    steps:[
+      {need:5,  name:'Well rounded', hint:'5 muscles in one week'},
+      {need:10, name:'Most of you',  hint:'10 muscles in one week'},
+      {need:14, name:'Head to toe',  hint:'Every map muscle in one week'}
+    ]
+  }
+];
+function badgeLadderState(ladder){
+  const count = ladder.count();
+  let earnedIdx = -1;
+  ladder.steps.forEach((s,i)=>{ if(count >= s.need) earnedIdx = i; });
+  const next = ladder.steps[earnedIdx+1] || null;
+  const prevNeed = earnedIdx>=0 ? ladder.steps[earnedIdx].need : 0;
+  const span = next ? (next.need - prevNeed) : 1;
+  const pct = next
+    ? Math.max(0, Math.min(1, (count - prevNeed) / (span || 1)))
+    : (earnedIdx>=0 ? 1 : 0);
+  return {
+    count,
+    earnedIdx,
+    next,
+    pct,
+    current: earnedIdx>=0 ? ladder.steps[earnedIdx] : null
+  };
+}
+function badgeTier(ladder, stepIdx){
+  const n = ladder.steps.length || 1;
+  const t = (stepIdx+1)/n;
+  if(t <= 1/3 + 1e-9) return 'silver';
+  if(t <= 2/3 + 1e-9) return 'spark';
+  return 'black';
+}
+function ensureBadgesSeenSeeded(){
+  const s = DATA.settings;
+  if(!s.badgesSeen || typeof s.badgesSeen!=='object' || Array.isArray(s.badgesSeen)) s.badgesSeen = {};
+  if(s.badgesSeenSeeded) return;
+  BADGE_LADDERS.forEach(l=>{
+    s.badgesSeen[l.id] = badgeLadderState(l).earnedIdx;
+  });
+  s.badgesSeenSeeded = true;
+  saveData(DATA);
+}
+function unseenBadgeUnlocks(){
+  ensureBadgesSeenSeeded();
+  const seen = DATA.settings.badgesSeen || {};
+  const out = [];
+  BADGE_LADDERS.forEach(l=>{
+    const st = badgeLadderState(l);
+    const seenIdx = typeof seen[l.id]==='number' ? seen[l.id] : -1;
+    if(st.earnedIdx > seenIdx){
+      out.push({ladder:l, state:st, from:seenIdx, to:st.earnedIdx});
+    }
+  });
+  return out;
+}
+function markBadgesSeen(){
+  ensureBadgesSeenSeeded();
+  const seen = DATA.settings.badgesSeen;
+  BADGE_LADDERS.forEach(l=>{
+    seen[l.id] = badgeLadderState(l).earnedIdx;
+  });
+  saveData(DATA);
+}
+function badgeRemainingText(ladder, state){
+  if(!state.next){
+    const n = ladder.steps.length;
+    return n ? 'Ladder cleared' : '';
+  }
+  const left = state.next.need - state.count;
+  const unit = ladder.unit || '';
+  const rounded = ladder.id==='tonnes'
+    ? Math.max(0.1, Math.round(left*10)/10)
+    : Math.max(0, Math.ceil(left));
+  const plural = rounded===1 ? unit : (unit==='PR' ? 'PRs' : unit+'s');
+  return `${rounded} more ${plural} to ${state.next.name}`;
+}
+/* Chip pick: a newly earned badge wins; otherwise the ladder closest to its next. */
+function featuredBadge(){
+  ensureBadgesSeenSeeded();
+  const states = BADGE_LADDERS.map(l=>{
+    const st = badgeLadderState(l);
+    return {ladder:l, ...st};
+  });
+  const news = unseenBadgeUnlocks();
+  if(news.length){
+    news.sort((a,b)=> b.to - a.to);
+    const pick = news[0];
+    const step = pick.ladder.steps[pick.to];
+    return {
+      ladder: pick.ladder,
+      step,
+      state: pick.state,
+      earned: true,
+      isNew: true,
+      name: step.name,
+      kicker: pick.ladder.title,
+      progressLabel: badgeRemainingText(pick.ladder, pick.state),
+      pct: pick.state.pct,
+      tier: badgeTier(pick.ladder, pick.to)
+    };
+  }
+  const withNext = states.filter(s=> s.next);
+  let pick = null;
+  if(withNext.length){
+    withNext.sort((a,b)=> b.pct - a.pct || a.next.need - b.next.need);
+    pick = withNext[0];
+  } else {
+    pick = states.slice().sort((a,b)=> b.earnedIdx - a.earnedIdx)[0];
+  }
+  if(!pick){
+    const first = BADGE_LADDERS[0];
+    return {
+      ladder: first, step: first.steps[0], state: badgeLadderState(first),
+      earned:false, isNew:false, name:first.steps[0].name, kicker:first.title,
+      progressLabel: first.steps[0].hint, pct:0, tier:'silver'
+    };
+  }
+  const step = pick.current || pick.next || pick.ladder.steps[0];
+  const stepIdx = pick.earnedIdx >= 0 ? pick.earnedIdx : 0;
+  return {
+    ladder: pick.ladder,
+    step,
+    state: pick,
+    earned: pick.earnedIdx >= 0,
+    isNew: false,
+    name: step.name,
+    kicker: pick.ladder.title,
+    progressLabel: badgeRemainingText(pick.ladder, pick),
+    pct: pick.next ? pick.pct : 1,
+    tier: badgeTier(pick.ladder, Math.max(0, stepIdx))
+  };
+}
+function badgeTotals(){
+  let earned = 0, total = 0;
+  BADGE_LADDERS.forEach(l=>{
+    total += l.steps.length;
+    earned += badgeLadderState(l).earnedIdx + 1;
+  });
+  return {earned: Math.max(0, earned), total};
 }
 function statsDeloadInfo(){
   const weeks = [];
