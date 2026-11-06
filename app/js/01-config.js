@@ -1,8 +1,8 @@
 /* ============================ §1 CONFIG ============================ */
 const APP_NAME = "TrackA'gain";
 /* Stamped by the release script (trackagain-capacitor-project/trackagain/release.ps1); don't edit by hand. */
-const APP_VERSION = '1.8.0';
-const APP_BUILD = 9;
+const APP_VERSION = '1.8.1';
+const APP_BUILD = 10;
 const SITE_URL = 'https://nirray2392.github.io/TrackAgain/';
 const UPDATE_URL = SITE_URL + 'version.json';
 const STORAGE_KEY = 'liftlog_data_v2'; // legacy key — renaming would wipe saved workouts

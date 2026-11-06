@@ -170,7 +170,7 @@ function greetingText(name){
 }
 function appreciationLine(totalSets, prCount){
   const name = DATA.settings.userName || 'there';
-  if(prCount>0)      return `🏆 ${prCount} new PR${prCount>1?'s':''} today — great session, ${name}!`;
+  if(prCount>0)      return `${prCount} new PR${prCount>1?'s':''} today — great session, ${name}!`;
   if(totalSets>=15)  return `Huge effort — you crushed ${totalSets} sets today!`;
   if(totalSets>=8)   return `Great session! You crushed ${totalSets} sets today.`;
   if(totalSets>0)    return `Nice work getting ${totalSets} set${totalSets>1?'s':''} in today.`;

@@ -5,7 +5,7 @@ const ICON_PATHS = {
   history:'<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v6l4 2"/>',
   trophy:'<path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H5a3 3 0 0 0 3 5"/><path d="M17 6h2a3 3 0 0 1-3 5"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
-  flame:'<path d="M12 3c2 4-1 6 1 9 1.5 2 4 2 4 6a5 5 0 0 1-10 0c0-4 3-6 3-10 0-2-1-3 2-5Z"/>',
+  flame:'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
   plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
   minus:'<path d="M5 12h14"/>',
   check:'<path d="M20 6 9 17l-5-5"/>',
@@ -34,6 +34,9 @@ const ICON_PATHS = {
 function icon(name, size){
   size = size || 20;
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]||''}</svg>`;
+}
+function prMarkHtml(size){
+  return `<span class="trophy">${icon('trophy', size||16)}</span>`;
 }
 /* Hex medallion for the badge shelf. state: earned | next | locked. */
 function badgeMedalHtml(step, ladder, opts){
@@ -764,7 +767,7 @@ function setRowsInto(container, sets, metric, handlers){
         ${bonus ? '<span class="badge-bonus">Bonus</span>' : ''}
         ${set.isWarmup ? '<span class="tag">WU</span>' : ''}
         <span>${setValueText(set, metric)}</span>
-        ${set.isPR ? '<span class="trophy">🏆</span>' : ''}
+        ${set.isPR ? prMarkHtml(14) : ''}
         ${set.intent==='strength' ? '<span class="tag strength">Strength</span>' : ''}
         <span class="diff-tag ${effortClass(set.difficulty)}">${effortLabel(set.difficulty)}</span>
         ${handlers.onEdit ? '<button class="btn ghost" style="padding:8px;margin-left:auto;min-width:44px;" data-edit aria-label="Edit set">'+icon('pencil',16)+'</button>' : ''}
@@ -874,8 +877,10 @@ function countUpStatVals(root){
     requestAnimationFrame(paint);
   });
 }
-function prepDetailEnter(root){
+/* opts.bars=false keeps bar widths (History measures full height first). */
+function prepDetailEnter(root, opts){
   if(!root) return;
+  const zeroBars = !(opts && opts.bars===false);
   qa('[data-type-title]', root).forEach(node=>{
     if(node.dataset.full==null) node.dataset.full = node.textContent || '';
     const full = node.dataset.full;
@@ -891,13 +896,15 @@ function prepDetailEnter(root){
     node.appendChild(off);
   });
   qa('.mw-bar span', root).forEach(span=>{
-    if(span.dataset.targetWidth!=null) return;
-    span.dataset.targetWidth = span.style.width || '0%';
-    if(!prefersReducedMotion()) span.style.width = '0%';
+    if(span.dataset.targetWidth==null) span.dataset.targetWidth = span.style.width || '0%';
+    if(zeroBars && !prefersReducedMotion()) span.style.width = '0%';
   });
 }
-function playDetailEnter(root){
+/* opts.rows=false / emptyPulse=false: History skips opacity flashes under the typewriter. */
+function playDetailEnter(root, opts){
   if(!root) return;
+  const rows = !(opts && opts.rows===false);
+  const emptyPulse = !(opts && opts.emptyPulse===false);
   if(prefersReducedMotion()){
     qa('[data-type-title]', root).forEach(node=>{
       if(node.dataset.full!=null) node.textContent = node.dataset.full;
@@ -918,24 +925,129 @@ function playDetailEnter(root){
       span.style.transition = `width 420ms var(--ease) ${i*40}ms`;
       span.style.width = span.dataset.targetWidth || '0%';
     });
-    qa('.rec-row, .mw-row', root).forEach((row, i)=>{
-      row.classList.add('detail-row-in');
-      row.style.animationDelay = (i*40)+'ms';
-    });
-    const empty = q('[data-empty-pulse]', root);
-    if(empty) empty.classList.add('detail-empty-pulse');
+    if(rows){
+      qa('.rec-row, .mw-row', root).forEach((row, i)=>{
+        row.classList.add('detail-row-in');
+        row.style.animationDelay = (i*40)+'ms';
+      });
+    }
+    if(emptyPulse){
+      const empty = q('[data-empty-pulse]', root);
+      if(empty) empty.classList.add('detail-empty-pulse');
+    }
   });
 }
 let detailSwapToken = 0;
+const HISTORY_SWAP_MS = 640;
+function measureSwapTarget(parent, newNode, width, historyQuiet){
+  const probe = newNode.cloneNode(true);
+  probe.style.cssText = `visibility:hidden;position:absolute;left:-9999px;width:${width}px;`;
+  parent.appendChild(probe);
+  if(historyQuiet) prepDetailEnter(probe, {bars:false});
+  else prepDetailEnter(probe);
+  const toH = probe.offsetHeight;
+  const toM = cardMargins(probe);
+  probe.remove();
+  return {toH, toM};
+}
+function placeSwapNode(shell, newNode, toM, historyQuiet){
+  if(historyQuiet){
+    prepDetailEnter(newNode, {bars:false});
+    // Zero bars after insert, same turn, so grow still runs without a short height.
+    qa('.mw-bar span', newNode).forEach(span=>{
+      if(span.dataset.targetWidth==null) span.dataset.targetWidth = span.style.width || '0%';
+      if(!prefersReducedMotion()) span.style.width = '0%';
+    });
+  } else {
+    prepDetailEnter(newNode);
+    newNode.classList.add('detail-swap-in');
+  }
+  if(newNode.classList.contains('stats-detail')) newNode.style.animation = 'none';
+  newNode.style.marginTop = '0';
+  newNode.style.marginBottom = '0';
+  shell.appendChild(newNode);
+  shell.style.marginTop = toM.top+'px';
+  shell.style.marginBottom = toM.bottom+'px';
+}
+/* A shell created this turn has not painted yet. One frame is still before that
+   paint, so History waits one more frame or the height change is skipped. */
+function easeShellTo(shell, toH){
+  const apply = ()=>{
+    if(!shell.isConnected) return;
+    shell.style.height = Math.max(toH, 1)+'px';
+  };
+  if(!shell.classList.contains('is-history')){
+    void shell.offsetHeight;
+    apply();
+    return;
+  }
+  requestAnimationFrame(()=> requestAnimationFrame(apply));
+}
+function settleSwapShell(shell, newNode, token, fromH, toH){
+  return new Promise(resolve=>{
+    let done = false;
+    const finish = ()=>{
+      if(done) return;
+      done = true;
+      if(token!==detailSwapToken){ resolve(newNode); return; }
+      if(shell.parentNode && newNode.parentNode===shell){
+        shell.parentNode.insertBefore(newNode, shell);
+        shell.remove();
+      }
+      clearSwapSeat(newNode);
+      newNode.classList.remove('detail-swap-in');
+      newNode.style.animation = '';
+      resolve(newNode);
+    };
+    const onEnd = (e)=>{
+      if(e.target!==shell || e.propertyName!=='height') return;
+      shell.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallback);
+      finish();
+    };
+    shell.addEventListener('transitionend', onEnd);
+    const history = shell.classList.contains('is-history');
+    const fallback = setTimeout(()=>{
+      shell.removeEventListener('transitionend', onEnd);
+      finish();
+    }, (history ? HISTORY_SWAP_MS : 280) + 120);
+    // Same height: transitionend may never fire.
+    if(Math.abs(fromH - toH) < 1){
+      shell.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallback);
+      setTimeout(finish, history ? 32 : 240);
+    }
+  });
+}
+/* A second tap during the ease keeps the shell and aims at the new height. */
+function retargetHistorySwap(shell, oldNode, newNode){
+  const token = ++detailSwapToken;
+  const parent = shell.parentNode;
+  const width = oldNode.offsetWidth || shell.clientWidth;
+  const {toH, toM} = measureSwapTarget(parent, newNode, width, true);
+  const current = shell.getBoundingClientRect().height;
+  shell.style.transition = 'none';
+  shell.style.height = Math.max(current, 1)+'px';
+  void shell.offsetHeight;
+  shell.style.transition = '';
+  clearSwapSeat(oldNode);
+  oldNode.remove();
+  placeSwapNode(shell, newNode, toM, true);
+  playDetailEnter(newNode, {rows:false, emptyPulse:false});
+  easeShellTo(shell, toH);
+  return settleSwapShell(shell, newNode, token, current, toH);
+}
 function swapDetailCard(oldNode, newNode){
   if(!newNode) return Promise.resolve(null);
   if(!oldNode || !oldNode.parentNode){
     return Promise.resolve(newNode);
   }
   if(oldNode===newNode) return Promise.resolve(newNode);
-  // Mid-flight morph: snap the shell closed so rapid taps do not nest shells.
+  const historyQuiet = newNode.hasAttribute && newNode.hasAttribute('data-history-summary');
+  // Mid-flight morph: History retargets. Stats snaps so rapid taps do not nest shells.
   if(oldNode.parentElement && oldNode.parentElement.classList.contains('detail-swap-shell')){
     const busy = oldNode.parentElement;
+    if(historyQuiet) return retargetHistorySwap(busy, oldNode, newNode);
     clearSwapSeat(oldNode);
     busy.replaceWith(newNode);
     detailSwapToken += 1;
@@ -945,74 +1057,33 @@ function swapDetailCard(oldNode, newNode){
     oldNode.replaceWith(newNode);
     return Promise.resolve(newNode);
   }
+  // History: typewriter + bars, no opacity fades / row flash. Stats keeps the full path.
   const token = ++detailSwapToken;
   const parent = oldNode.parentNode;
   const width = oldNode.offsetWidth;
-
-  // Measure the enter layout (title reserved, bars at 0) so height does not jump mid-type.
-  const probe = newNode.cloneNode(true);
-  probe.style.cssText = `visibility:hidden;position:absolute;left:-9999px;width:${width}px;`;
-  parent.appendChild(probe);
-  prepDetailEnter(probe);
-  const toH = probe.offsetHeight;
-  const toM = cardMargins(probe);
-  probe.remove();
+  // History measures full height (bars left on). Stats blanks first so height stays steady mid-type.
+  const {toH, toM} = measureSwapTarget(parent, newNode, width, historyQuiet);
 
   const shell = document.createElement('div');
-  shell.className = 'detail-swap-shell';
+  shell.className = 'detail-swap-shell'+(historyQuiet ? ' is-history' : '');
   parent.insertBefore(shell, oldNode);
   const fromH = seatInSwapShell(shell, oldNode);
-  oldNode.classList.add('detail-swap-out');
+  if(!historyQuiet) oldNode.classList.add('detail-swap-out');
 
+  const runEnter = ()=>{
+    if(token!==detailSwapToken || !shell.isConnected) return Promise.resolve(newNode);
+    clearSwapSeat(oldNode);
+    oldNode.remove();
+    placeSwapNode(shell, newNode, toM, historyQuiet);
+    easeShellTo(shell, toH);
+    playDetailEnter(newNode, historyQuiet ? {rows:false, emptyPulse:false} : undefined);
+    return settleSwapShell(shell, newNode, token, fromH, toH);
+  };
+
+  // History has no fade-out to wait for — swap immediately so the panel does not pop.
+  if(historyQuiet) return runEnter();
   return new Promise(resolve=>{
-    setTimeout(()=>{
-      if(token!==detailSwapToken || !shell.isConnected){ resolve(newNode); return; }
-      clearSwapSeat(oldNode);
-      oldNode.remove();
-      prepDetailEnter(newNode);
-      newNode.classList.add('detail-swap-in');
-      if(newNode.classList.contains('stats-detail')) newNode.style.animation = 'none';
-      newNode.style.marginTop = '0';
-      newNode.style.marginBottom = '0';
-      shell.appendChild(newNode);
-      shell.style.marginTop = toM.top+'px';
-      shell.style.marginBottom = toM.bottom+'px';
-      void shell.offsetHeight;
-      shell.style.height = Math.max(toH, 1)+'px';
-      playDetailEnter(newNode);
-
-      let done = false;
-      const finish = ()=>{
-        if(done) return;
-        done = true;
-        if(token!==detailSwapToken){ resolve(newNode); return; }
-        if(shell.parentNode && newNode.parentNode===shell){
-          shell.parentNode.insertBefore(newNode, shell);
-          shell.remove();
-        }
-        clearSwapSeat(newNode);
-        newNode.classList.remove('detail-swap-in');
-        newNode.style.animation = '';
-        resolve(newNode);
-      };
-      const onEnd = (e)=>{
-        if(e.target!==shell || e.propertyName!=='height') return;
-        shell.removeEventListener('transitionend', onEnd);
-        clearTimeout(fallback);
-        finish();
-      };
-      shell.addEventListener('transitionend', onEnd);
-      const fallback = setTimeout(()=>{
-        shell.removeEventListener('transitionend', onEnd);
-        finish();
-      }, 450);
-      // Same height: transitionend may never fire.
-      if(Math.abs(fromH - toH) < 1){
-        shell.removeEventListener('transitionend', onEnd);
-        clearTimeout(fallback);
-        setTimeout(finish, 240);
-      }
-    }, 120);
+    setTimeout(()=>{ resolve(runEnter()); }, 120);
   });
 }
 

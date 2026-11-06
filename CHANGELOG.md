@@ -16,6 +16,33 @@ How this file works
 ### Fixes
 ### Nerd stuff
 
+# v1.8.1
+## 6 November 2026
+### Improvements
+- **The day name is the title.** Tap a gym day and the workout name sits large beside the date, in the same heavy type as your weight. Clear is a small cross.
+- **Past weigh-ins fold by month.** Open the list and each month drops down on its own. A row is still the date, the weight, and the change from the one before.
+- A record shows the same cup as the Stats tab. It is black in light mode and spark green in dark mode.
+- **The streak is a real flame.** The mark beside your streak is a fire, not a blob.
+- **Last workout is a card at the bottom of Home.** The date, the workout name, and a record cup sit together. Tap it and History opens that day with the sets up.
+- History no longer prints its name at the top. The tab already says it.
+- **A month stays in the card.** Tap a month name on Days in the gym and that month’s days, consistency, change, and streak replace the summary. Clear brings the all-time summary back. It no longer opens a sheet.
+- Muscle targeting uses the same size and weight as the month name.
+- **Days in the gym is just the calendar.** Tap a square to open that day. The workout list and the range picker under it are gone. With no day picked, the summary is all time.
+- **Sets stack under each exercise.** On See sets, set 2 sits under set 1. Exercises fill down the left column, then the right.
+- Tapping a History day still grows the bars, without the phone blink or jitter.
+### Fixes
+- A selected month name sits in a small spark chip. The line under it used to run the full width of that month.
+- **See sets stays on.** Changing the day, or hitting Clear, used to jump back to the summary. Sets stay up until you tap Summary.
+- **The day card eases open.** See sets and changing the day used to snap to the new height. The card grows and shrinks smoothly.
+### Nerd stuff
+- Day title is `.history-day-name` (30px), on the same row as the date tile. Clear is `.history-day-clear`. Past weigh-ins group under `.bw-log-month` (`weightLogMonths`); rows stay `.bw-log-row`. A record mark is `prMarkHtml` (`.trophy`, `color: var(--accent)`). Removed `renderBodyWeightTree`, `renderWeightMonthLevel`, `renderWeightWeekLevel`, and `weightTreeOpen`.
+- `openHistoryDaySets` sets `historyDay` and `historyDaySetsOpen`, then opens History. Home’s Last workout card is `.last-workout`. The streak glyph is the Lucide flame path on `ICON_PATHS.flame`.
+- `historyMonth` and `selectHistoryMonth` share the summary slot with `historyDay`. `historyMonthSummaryCard` uses `gymMonthKpis` and `historyMonthWork`. Removed `openGymMonthSheet`, `bindGymMonthPress`, and `swallowNextClick`.
+- History: no `#historyRange`. `historyFilter` stays `all`. `selectHistoryDay` only runs from a calendar square. `historyDaySetsOpen` is cleared only by Summary and by leaving the tab.
+- `historyDaySetsBody` places exercises in a column-flow grid (`ceil(n / 2)` rows, one column when there is a single exercise). Sets in each exercise are a vertical `.history-set-grid`.
+- `gymYearBounds` still extends the strip. `historyInsights` scales bars to the peak and compares sets per week.
+- History day swaps measure full height and skip opacity fades / row flash / empty pulse. Typewriter and bar grow stay on. `.detail-swap-shell.is-history` eases height over 640ms, waits two frames so the start height paints, and a second tap retargets from the live height.
+
 # v1.8.0
 ## 4 November 2026
 ### Features

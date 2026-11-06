@@ -1920,7 +1920,7 @@ function liveSetFeedback(exerciseId, planRow, todaySets, status, reopened){
   }
 
   if(last.isPR){
-    say('pr','good',[`New best: ${lastText} 🏆`, `PR — ${lastText}. That's real progress.`, `${lastText} beats everything you've logged.`]);
+    say('pr','good',[`New best: ${lastText}`, `PR — ${lastText}. That's real progress.`, `${lastText} beats everything you've logged.`]);
     out.note = tail();
     return out;
   }
@@ -2098,7 +2098,7 @@ function makeStepperPreview(exerciseId, planRow, todaySets, status){
     const v = setValuesFrom(metric, draft);
     if(!validSetValues(v)) return {text:'', tone:'neutral'};
     const score = setPerformanceScore(v, metric);
-    if(best!=null && (higher ? score > best+1e-9 : score < best-1e-9)) return {text:`${setValueText(v, metric, ex)} would be a new PR 🏆`, tone:'pr'};
+    if(best!=null && (higher ? score > best+1e-9 : score < best-1e-9)) return {text:`${setValueText(v, metric, ex)} would be a new PR`, tone:'pr'};
     if(loadBased && repsTarget!=null && setsNeeded>0){
       const atTarget = working.filter(s=> Math.abs((s.weight||0)-(v.weight||0)) < 0.01 && (s.reps||0) >= repsTarget).length;
       if(atTarget < setsNeeded){

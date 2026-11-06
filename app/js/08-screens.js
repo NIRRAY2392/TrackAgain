@@ -391,7 +391,6 @@ function renderLanding(){
         : `<button class="btn hero-cta" data-start>${icon('plus',18)} Start Workout</button>`}
       <div class="hero-meta">
         <span class="pill">${icon('flame',14)} ${currentStreakDays()} day streak</span>
-        <span class="pill">${last ? `Last workout: ${relativeDay(last.date)}` : 'No workouts logged yet'}</span>
       </div>
     </div>`);
   if(log.active){
@@ -465,20 +464,39 @@ function renderLanding(){
   if(trainedToday){
     const work = muscleWorkCard(log.sets, "Today's muscle work");
     if(work) wrap.appendChild(work);
-  } else if(last){
-    wrap.appendChild(el(`
-      <div class="card flat">
-        <p class="section-title" style="margin-top:0;">Last workout</p>
-        <div class="row between">
-          <div>
-            <strong>${formatLogDate(last.date)}</strong>
-            <div class="faint small">${workingSetCount(last.sets)} set${workingSetCount(last.sets)===1?'':'s'} logged</div>
-          </div>
-          ${last.sets.some(s=>s.isPR) ? '<span class="trophy" style="font-size:20px;">🏆</span>' : ''}
-        </div>
-      </div>`));
   }
+  if(last) wrap.appendChild(lastWorkoutCard(last));
   return wrap;
+}
+function lastWorkoutCard(last){
+  const sets = workingSetCount(last.sets);
+  const dur = sessionDurationMs(last);
+  const mins = dur>0 ? Math.round(dur/60000) : 0;
+  const name = (typeof historyDayName==='function' && historyDayName(last.date, last)) || planNameForLog(last) || 'Workout';
+  const when = typeof historyWhenLabel==='function' ? historyWhenLabel(last.date) : relativeDay(last.date);
+  const meta = `${when} · ${sets} set${sets===1?'':'s'}${mins>0?` · ${formatDuration(dur)}`:''}`;
+  const tile = typeof bodyWeightTileHtml==='function'
+    ? bodyWeightTileHtml(last.date)
+    : '';
+  const card = el(`
+    <button type="button" class="card flat last-workout">
+      <div class="lw-head">
+        <p class="section-title">Last workout</p>
+        <span class="lw-open">See sets ${icon('chevronRight',15)}</span>
+      </div>
+      <div class="lw-body">
+        ${tile}
+        <div class="lw-copy">
+          <div class="lw-name-row">
+            <div class="lw-name">${escapeHtml(name)}</div>
+            ${last.sets.some(s=>s.isPR) ? prMarkHtml(20) : ''}
+          </div>
+          <div class="lw-meta">${escapeHtml(meta)}</div>
+        </div>
+      </div>
+    </button>`);
+  card.onclick = ()=> openHistoryDaySets(last.date);
+  return card;
 }
 
 /* One bar for the clocks in the fixed header. Training: the workout clock.
@@ -842,7 +860,7 @@ function todaySetRowsHtml(doneSets, metric, targetSets, showAll, editing){
     let html = `
       <div class="ts-row${bonus?' bonus':''}${set.isWarmup?' warmup':''}${isEditing(set, mainStage)?' editing':''}" data-edit-set="${set.id}" data-stage="${mainStage==null?'':mainStage}" role="button" tabindex="0" aria-label="Edit set ${i+1}">
         <span class="ts-num">${i+1}</span>
-        <span class="ts-val">${escapeHtml(mainVal)}${set.isPR?' <span class="trophy">🏆</span>':''}${set.intent==='strength'?' <span class="ts-tag">Strength</span>':''}${set.isDropSet?' <span class="ts-tag">Drop set</span>':''}</span>
+        <span class="ts-val">${escapeHtml(mainVal)}${set.isPR?' '+prMarkHtml(14):''}${set.intent==='strength'?' <span class="ts-tag">Strength</span>':''}${set.isDropSet?' <span class="ts-tag">Drop set</span>':''}</span>
         <span class="ts-feel">${set.isWarmup?'Warm-up':effortLabel(set.difficulty)}</span>
         <button type="button" class="ts-del" data-del-set="${set.id}" data-stage="" aria-label="Delete set ${i+1}">${icon('x',15)}</button>
       </div>`;

@@ -2269,7 +2269,7 @@ function openExerciseDetailSheet(exerciseId, opts){
           <div class="hist-day">
             <div class="row between">
               <div>
-                <strong>${formatLogDate(session.date)}</strong> ${session.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
+                <strong>${formatLogDate(session.date)}</strong> ${session.sets.some(s=>s.isPR)?prMarkHtml(14):''}
                 <div class="faint small">${session.sets.map(s=>setValueText(s,metric)).join(', ')}</div>
               </div>
               <span class="chip">${sessionChipText(session.sets, metric, ex)}</span>
@@ -2638,7 +2638,7 @@ function renderPrLogTree(moments, metric, rerender, ex){
       <div class="hist-day pr-row${moment===newest?' current':''}">
         <div class="pr-when">
           <strong>${escapeHtml(prDayLabel(moment.date))}</strong>
-          <div class="faint small">${moment===newest?'<span class="trophy">🏆</span> Current · ':''}${escapeHtml(prDeltaText(moments[idx+1], moment, metric, ex))}</div>
+          <div class="faint small">${moment===newest?prMarkHtml(14)+' Current · ':''}${escapeHtml(prDeltaText(moments[idx+1], moment, metric, ex))}</div>
         </div>
         <span class="pr-val">${escapeHtml(formatPrValue(moment.set, metric))}</span>
       </div>`));
@@ -2745,19 +2745,21 @@ function openRecordsPrSheet(exerciseId){
 /* In-memory only. Workout rows still come from DATA.logs on every render. */
 let historyFilter = 'all';
 let historyDay = null;          // YYYY-MM-DD when a gym square is selected
+let historyMonth = null;        // YYYY-MM when a month name is selected
+let historyDaySetsOpen = false; // day summary shows sets instead of KPIs
 let afterHistoryRender = [];
 let gymYearObserver = null;
 let historyTreeOpen = {year:null, month:null, week:null};
 let weightLogOpen = false;
-let pastWorkoutsOpen = false;
-let weightTreeOpen = {year:null, month:null, week:null};
+let weightLogMonths = new Set();
 function resetHistoryState(){
   historyFilter = 'all';
   historyDay = null;
+  historyMonth = null;
+  historyDaySetsOpen = false;
   historyTreeOpen = {year:null, month:null, week:null};
-  weightTreeOpen = {year:null, month:null, week:null};
-  pastWorkoutsOpen = false;
   weightLogOpen = false;
+  weightLogMonths = new Set();
 }
 function resetTabState(tab){
   if(tab==='stats') clearStatsMuscle();
@@ -2795,12 +2797,10 @@ function workoutInHistoryFilter(log, filter){
 }
 function normalizeHistoryFilter(filter){
   if(filter==='all' || filter==='this' || filter==='last') return filter;
-  return /^\d{4}-\d{2}$/.test(filter||'') ? filter : 'all';
-}
-function historyMonthOptions(logs){
-  const months = new Set(logs.map(l=>l.date.slice(0,7)));
-  if(/^\d{4}-\d{2}$/.test(historyFilter)) months.add(historyFilter);
-  return [...months].sort((a,b)=> b.localeCompare(a));
+  if(!/^\d{4}-\d{2}$/.test(filter||'')) return 'all';
+  if(filter===thisMonthKey()) return 'this';
+  if(filter===shiftMonthKey(thisMonthKey(), -1)) return 'last';
+  return filter;
 }
 function groupLogsBy(logs, keyFn){
   const groups = [], map = {};
@@ -2854,32 +2854,54 @@ function historyWindow(filter, logs){
   const dates = logs.map(l=>l.date).sort();
   return {start:dates[0], end:dates[dates.length-1]<today ? dates[dates.length-1] : today};
 }
+/* All time and this month keep the live streak. A past month is that month's longest run. */
+function historyStreak(filter){
+  const range = historyRangeKey(filter);
+  if(!range || range===thisMonthKey()) return currentStreakDays();
+  return gymMonthStats(range, gymTrainedDates()).streak;
+}
 function historyInsights(logs, filter){
   const window = historyWindow(filter, logs);
   const days = daysInclusive(window.start, window.end);
   const weeks = Math.max(days/7, 1);
   const sets = logs.flatMap(l=>l.sets||[]);
-  const muscleTarget = TRAINING.weeklyEffectiveSetTarget * weeks;
+  const weeklyTarget = TRAINING.weeklyEffectiveSetTarget;
   const muscles = muscleWorkForSets(sets).filter(r=>r.effectiveSets>=0.2).slice(0,8);
-  const under = muscles.filter(r=>r.effectiveSets < muscleTarget*0.5).slice(0,2).map(r=>r.muscle);
+  const under = muscles.filter(r=> (r.effectiveSets/weeks) < weeklyTarget*0.5).slice(0,2).map(r=>r.muscle);
+  const peak = muscles.length ? Math.max(...muscles.map(r=>r.effectiveSets), 1) : 1;
   return {
-    streak: currentStreakDays(),
+    streak: historyStreak(filter),
     prs: sets.filter(s=>s.isPR).length,
     muscles,
-    muscleTarget,
+    musclePeak: peak,
     underNote: under.length
       ? under.join(' and ')+(under.length===1?' is':' are')+' well under the weekly target.'
       : ''
   };
 }
-/* Calendar year, plus the month before January and the month after December,
-   so last month, this month, and next month are always on the grid.
-   Each day sits in its own month. A week still starts on Monday, so the
-   block steps in where the month starts and out where it ends. */
-function gymYearMonths(){
+/* From the earliest logged month through the month after this December,
+   so a picked month from another year is on the strip. Last month, this
+   month, and next month are always included. Each day sits in its own month.
+   A week still starts on Monday, so the block steps in where the month
+   starts and out where it ends. */
+function gymYearBounds(){
   const year = todayKey().slice(0,4);
-  const first = shiftMonthKey(year+'-01', -1);
-  const last = shiftMonthKey(year+'-12', 1);
+  let first = shiftMonthKey(year+'-01', -1);
+  let last = shiftMonthKey(year+'-12', 1);
+  const logs = loggedWorkouts();
+  if(logs.length){
+    const earliest = logs[logs.length-1].date.slice(0,7);
+    if(earliest<first) first = earliest;
+  }
+  const range = historyRangeKey(historyFilter);
+  if(range){
+    if(range<first) first = range;
+    if(range>last) last = range;
+  }
+  return {first, last};
+}
+function gymYearMonths(){
+  const {first, last} = gymYearBounds();
   const start = weekStartKey(first+'-01');
   const endMonday = weekStartKey(last+'-'+String(daysInMonth(last)).padStart(2,'0'));
   const months = [];
@@ -2947,136 +2969,8 @@ function gymMonthKpis(ym){
     rate: gymRateText(now.count, now.days),
     prevName: monthNameOnly(prev),
     deltaText: gymDayPhrase(delta, true),
-    tone: delta>0 ? 'up' : delta<0 ? 'down' : 'same',
-    toneLabel: delta>0 ? 'Improving' : delta<0 ? 'Down' : 'Same',
-    streakText: gymDayPhrase(now.streak)
+    streak: now.streak
   };
-}
-function openGymMonthSheet(ym){
-  const kpi = gymMonthKpis(ym);
-  openSheet({
-    title: monthTitle(ym),
-    build:(body)=>{
-      body.appendChild(el(`
-        <div class="gym-month-kpi">
-          <p class="gym-month-sub">Monthly training overview</p>
-          <div class="gym-month-grid">
-            <div>
-              <div class="k">Workout days</div>
-              <div class="v accent">${kpi.count}</div>
-              <div class="c">of ${kpi.days} days</div>
-            </div>
-            <div>
-              <div class="k">Consistency</div>
-              <div class="v">${escapeHtml(kpi.rate)}</div>
-              <div class="c">Monthly rate</div>
-            </div>
-            <div>
-              <div class="k">vs. ${escapeHtml(kpi.prevName)}</div>
-              <div class="v">${escapeHtml(kpi.deltaText)}</div>
-              <div class="c ${kpi.tone}">${kpi.toneLabel}</div>
-            </div>
-            <div>
-              <div class="k">Longest streak</div>
-              <div class="v">${escapeHtml(kpi.streakText)}</div>
-              <div class="c">Consecutive days</div>
-            </div>
-          </div>
-        </div>`));
-    }
-  });
-}
-/* The click that ends a long-press can land on the new sheet and close it,
-   or on the gym day underneath. Swallow that one click. */
-function swallowNextClick(){
-  const swallow = (e)=>{
-    e.preventDefault();
-    e.stopPropagation();
-    document.removeEventListener('click', swallow, true);
-  };
-  document.addEventListener('click', swallow, true);
-  setTimeout(()=> document.removeEventListener('click', swallow, true), 700);
-}
-/* Tap the month name, or press and hold the month. A short tap on a green
-   square still opens that day. Moving (the strip scrolling) cancels the hold. */
-function bindGymMonthPress(block, ym){
-  const HOLD = 450;
-  const SLOP = 8;
-  let timer = null;
-  let start = null;
-  let moved = false;
-  let held = false;
-  const clearTimer = ()=>{
-    if(timer){ clearTimeout(timer); timer = null; }
-  };
-  const endWatch = ()=>{
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    window.removeEventListener('pointercancel', onCancel);
-  };
-  const onMove = (e)=>{
-    if(!start || e.pointerId!==start.id) return;
-    if(Math.hypot(e.clientX-start.x, e.clientY-start.y) <= SLOP) return;
-    moved = true;
-    held = false;
-    clearTimer();
-    start = null;
-    endWatch();
-  };
-  const onUp = (e)=>{
-    if(!start || e.pointerId!==start.id) return;
-    clearTimer();
-    start = null;
-    endWatch();
-  };
-  const onCancel = (e)=>{
-    if(start && e.pointerId!==start.id) return;
-    moved = true;
-    held = false;
-    clearTimer();
-    start = null;
-    endWatch();
-  };
-  block.addEventListener('pointerdown', (e)=>{
-    if(e.button!=null && e.button!==0) return;
-    moved = false;
-    held = false;
-    start = {x:e.clientX, y:e.clientY, id:e.pointerId};
-    clearTimer();
-    timer = setTimeout(()=>{
-      timer = null;
-      if(!start || !block.isConnected) return;
-      held = true;
-      start = null;
-      endWatch();
-      hapticTick();
-      swallowNextClick();
-      openGymMonthSheet(ym);
-    }, HOLD);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onCancel);
-  });
-  block.addEventListener('contextmenu', (e)=> e.preventDefault());
-  block.addEventListener('click', (e)=>{
-    if(held){
-      held = false;
-      moved = false;
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if(moved){
-      moved = false;
-      if(e.target.closest('.gym-year-label')){
-        e.preventDefault();
-        e.stopPropagation();
-      }
-      return;
-    }
-    if(!e.target.closest('.gym-year-label')) return;
-    openGymMonthSheet(ym);
-  }, true);
 }
 function gymYearCell(key, trained, minutes, today){
   if(!key) return el(`<div class="gym-year-slot"></div>`);
@@ -3133,90 +3027,191 @@ function historyDayLog(date){
 function bindHistorySummaryCard(card, logs, filter){
   if(!card) return;
   const clearDay = q('[data-clear-day]', card);
-  if(clearDay) clearDay.onclick = ()=>{ historyDay = null; refreshHistorySummary(); };
+  if(clearDay) clearDay.onclick = ()=>{
+    historyDay = null;
+    syncHistoryDaySel();
+    refreshHistorySummary();
+  };
+  const clearMonth = q('[data-clear-month]', card);
+  if(clearMonth) clearMonth.onclick = ()=>{
+    historyMonth = null;
+    syncHistoryMonthSel();
+    refreshHistorySummary();
+  };
   const seeSets = q('[data-see-sets]', card);
   if(seeSets){
-    const date = seeSets.getAttribute('data-see-sets');
-    seeSets.onclick = ()=> openHistoryDaySheet(date);
+    seeSets.onclick = ()=>{
+      historyDaySetsOpen = !historyDaySetsOpen;
+      refreshHistorySummary();
+    };
   }
   const scoreInfo = q('[data-score-info]', card);
   if(scoreInfo) scoreInfo.onclick = (e)=>{ e.stopPropagation(); openScoreInfoSheet(); };
   const gainInfo = q('[data-gain-info]', card);
   if(gainInfo) gainInfo.onclick = (e)=>{ e.stopPropagation(); openWeightGainSheet(logs, filter); };
-  const rangeField = q('#historyRange', card);
-  if(rangeField){
-    bindChoiceField(rangeField, {
-      title:'Workout summary range',
-      options:()=> historyRangeOptions(historyMonthOptions(loggedWorkouts())),
-      onChange:(value)=>{
-        historyFilter = normalizeHistoryFilter(value);
-        historyTreeOpen = {year:null, month:null, week:null};
-        pastWorkoutsOpen = false;
-        historyDay = null;
-        renderApp();
-      }
-    });
-  }
+}
+function historyWhenLabel(date){
+  const ago = daysInclusive(date, todayKey()) - 1;
+  if(ago===0) return 'Today';
+  if(ago===1) return 'Yesterday';
+  return parseDateKey(date).toLocaleDateString(undefined,{weekday:'long'});
+}
+function historyDayName(date, log){
+  const d = parseDateKey(date);
+  if(log && log.planName) return log.planName;
+  return (splitDays()[(log && log.dayKey) || weekdayKey(d)]||{}).name || '';
+}
+function historyDateTileHtml(date, isLatest){
+  const d = parseDateKey(date);
+  const cls = ['date-tile'];
+  if(isLatest) cls.push('latest');
+  if(historyDay===date) cls.push('sel');
+  return `<div class="${cls.join(' ')}"><span class="dd">${d.getDate()}</span><span class="mm">${escapeHtml(d.toLocaleDateString(undefined,{month:'short'}))}</span></div>`;
+}
+function historyLatestDate(){
+  const logs = loggedWorkouts().filter(l=>workoutInHistoryFilter(l, historyFilter));
+  return logs.length ? logs[0].date : '';
+}
+function historyDayMeta(date, log){
+  const when = historyWhenLabel(date);
+  if(!log) return when;
+  const sets = log.sets||[];
+  const dur = sessionDurationMs(log);
+  return `${when} · ${workingSetCount(sets)}\u00a0sets · ≈\u00a0${roundTo(totalEffectiveSets(sets))}\u00a0effective${dur>0?` · ${formatDuration(dur)}`:''}`;
+}
+function historyDaySetsBody(log){
+  const byExercise = {};
+  (log.sets||[]).forEach(set=>{ (byExercise[set.exerciseId] ||= []).push(set); });
+  const groups = Object.entries(byExercise);
+  const cols = groups.length < 2 ? 1 : 2;
+  const rows = Math.ceil(groups.length / cols) || 1;
+  const wrap = el(`<div class="history-day-sets"></div>`);
+  wrap.style.gridTemplateColumns = cols===1 ? '1fr' : '1fr 1fr';
+  wrap.style.gridTemplateRows = `repeat(${rows}, auto)`;
+  groups.forEach(([exerciseId, sets])=>{
+    const ex = getExercise(exerciseId);
+    const group = el(`
+      <div class="history-ex-group">
+        <div class="history-ex-name">${escapeHtml(ex?ex.name:'Unknown exercise')}</div>
+        <div class="history-set-grid" data-sets></div>
+      </div>`);
+    setRowsInto(q('[data-sets]', group), sets, metricOf(ex), {});
+    wrap.appendChild(group);
+  });
+  return wrap;
 }
 function historyDaySummaryCard(date){
   const log = historyDayLog(date);
   const sets = log ? (log.sets||[]) : [];
-  const dayName = log
-    ? (log.planName || (splitDays()[log.dayKey||weekdayKey(parseDateKey(date))]||{}).name || '')
-    : ((splitDays()[weekdayKey(parseDateKey(date))]||{}).name || '');
-  const head = `
-    <div class="stats-detail-head">
-      <div>
-        <div class="rec-kicker">Day</div>
-        <h3 class="stats-detail-title" data-type-title>${escapeHtml(formatLogDate(date))}</h3>
-        ${dayName ? `<div class="rec-sub">${escapeHtml(dayName)}</div>` : ''}
-      </div>
-      <button type="button" class="btn ghost" data-clear-day aria-label="Clear day">Clear</button>
+  const dayName = historyDayName(date, log) || (log ? 'Workout' : 'No workout');
+  const showSets = !!(log && historyDaySetsOpen);
+  const actions = `<div class="history-day-actions">
+      ${log ? `<button type="button" class="btn ghost" data-see-sets>${showSets ? 'Summary' : 'See sets'}</button>` : ''}
+      <button type="button" class="btn ghost history-day-clear" data-clear-day aria-label="Clear day">${icon('x',16)}</button>
     </div>`;
+  const trophy = log && sets.some(s=>s.isPR) ? prMarkHtml(20) : '';
+  const head = `
+    <div class="history-day-head">
+      <div class="history-day-top">
+        ${historyDateTileHtml(date, historyLatestDate()===date)}
+        <div class="history-day-name-row">
+          <div class="history-day-name">${escapeHtml(dayName)}</div>
+          ${trophy}
+        </div>
+        ${actions}
+      </div>
+      <div class="history-day-meta faint small">${escapeHtml(historyDayMeta(date, log))}</div>
+    </div>`;
+  const card = el(`<div class="history-summary" data-history-summary>${head}<div class="history-day-body" data-day-body></div></div>`);
+  const body = q('[data-day-body]', card);
+  if(showSets){
+    body.appendChild(historyDaySetsBody(log));
+    return card;
+  }
   if(log){
     const workSets = workingSetCount(sets);
     const dur = sessionDurationMs(log);
     const prs = sets.filter(s=>s.isPR).length;
     const muscles = muscleWorkForSets(sets).filter(r=>r.effectiveSets>=0.2).slice(0,8);
     const peak = Math.max(...muscles.map(r=>r.effectiveSets), 1);
-    return el(`
-      <div class="card" data-history-summary>
-        ${head}
+    body.appendChild(el(`
+      <div>
         ${statGridHtml([
           {value:String(workSets), label:workSets===1?'Set':'Sets'},
           {value:String(roundTo(totalEffectiveSets(sets))), label:'Effective'},
           {value:escapeHtml(dur>0 ? formatDuration(dur) : '—'), label:'Time'},
           {value:String(prs), label:prs===1?'Record':'Records'}
         ], 'cols-2')}
-        <div style="margin-top:14px;">
-          <p class="small muted" style="margin-bottom:4px;">Muscle targeting</p>
+        <div class="history-muscles">
+          <p class="small muted">Muscle targeting</p>
           ${historyMuscleRowsHtml(muscles, peak)}
         </div>
-        <button type="button" class="btn secondary" data-see-sets="${escapeHtml(date)}" style="width:100%;margin-top:12px;">See sets</button>
-      </div>`);
+      </div>`));
+    return card;
   }
   const guilt = historyGuiltLine(date);
-  return el(`
-    <div class="card" data-history-summary>
-      ${head}
+  body.appendChild(el(`
+    <div>
       ${statGridHtml([
         {value:'0', label:'Sets'},
         {value:'0', label:'Effective'},
         {value:'—', label:'Time'},
         {value:'0', label:'Records'}
       ], 'cols-2')}
-      <div style="margin-top:14px;">
-        <p class="small muted" style="margin-bottom:4px;">Muscle targeting</p>
-        <p class="faint small" style="margin-top:8px;" data-empty-pulse>No muscle work.</p>
+      <div class="history-muscles">
+        <p class="small muted">Muscle targeting</p>
+        <p class="faint small" data-empty-pulse>No muscle work.</p>
         <p class="stats-kpi-line" data-type-title data-guilt>${escapeHtml(guilt)}</p>
       </div>
-    </div>`);
+    </div>`));
+  return card;
 }
 function selectHistoryDay(date){
   if(!date) return;
   historyDay = historyDay===date ? null : date;
+  if(historyDay) historyMonth = null;
   syncHistoryDaySel();
+  syncHistoryMonthSel();
   refreshHistorySummary();
+  revealHistorySummary();
+}
+function openHistoryDaySets(date){
+  if(!date) return;
+  historyDay = date;
+  historyMonth = null;
+  historyDaySetsOpen = true;
+  goToTab('history');
+  revealHistorySummary();
+}
+function syncHistoryMonthSel(){
+  qa('.gym-year-label[data-ym]').forEach(btn=>{
+    const on = btn.getAttribute('data-ym')===historyMonth;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+function selectHistoryMonth(ym){
+  if(!ym) return;
+  historyMonth = historyMonth===ym ? null : ym;
+  if(historyMonth){
+    historyDay = null;
+    historyDaySetsOpen = false;
+  }
+  syncHistoryDaySel();
+  syncHistoryMonthSel();
+  refreshHistorySummary();
+  revealHistorySummary();
+}
+function revealHistorySummary(){
+  const node = q('[data-summary-host]');
+  if(!node) return;
+  const head = q('.app-head');
+  const bar = document.getElementById('tabbar');
+  const topLimit = (head ? head.getBoundingClientRect().bottom : 0) + 8;
+  const bottomLimit = window.innerHeight - (bar ? bar.offsetHeight : 0) - 8;
+  const rect = node.getBoundingClientRect();
+  if(rect.top >= topLimit && rect.top < bottomLimit) return;
+  const delta = rect.top < topLimit ? rect.top - topLimit : rect.top - bottomLimit;
+  window.scrollBy({top:delta, behavior:prefersReducedMotion() ? 'auto' : 'smooth'});
 }
 function refreshHistorySummary(){
   const old = q('[data-history-summary]');
@@ -3244,8 +3239,9 @@ function gymYearActivity(){
   gymYearMonths().forEach(month=>{
     const label = parseDateKey(month.ym+'-01').toLocaleDateString(undefined,{month:'short'});
     const block = el(`<div class="gym-year-month" data-ym="${month.ym}"></div>`);
-    block.appendChild(el(`<button type="button" class="gym-year-label" aria-label="${escapeHtml(monthTitle(month.ym)+' overview')}">${escapeHtml(label)}</button>`));
-    bindGymMonthPress(block, month.ym);
+    const name = el(`<button type="button" class="gym-year-label" data-ym="${month.ym}" aria-pressed="${historyMonth===month.ym?'true':'false'}" aria-label="${escapeHtml(monthTitle(month.ym)+' overview')}">${escapeHtml(label)}</button>`);
+    name.onclick = ()=> selectHistoryMonth(month.ym);
+    block.appendChild(name);
     const cols = el(`<div class="gym-year-cols"></div>`);
     month.cols.forEach((days, i)=>{
       const col = el(`<div class="gym-year-col${i===0?' snap':''}" data-ym="${month.ym}"></div>`);
@@ -3277,6 +3273,8 @@ function layoutGymYear(root, keepScroll){
     const next = shiftMonthKey(current, 1);
     const windowYms = new Set([prev, current, next]);
     let anchor = prev;
+    const range = historyRangeKey(historyFilter);
+    if(range && range!==current) anchor = range;
     if(keepScroll){
       const edge = scroll.getBoundingClientRect().left + 1;
       const hit = cols.find(col=> col.getBoundingClientRect().right > edge);
@@ -3336,12 +3334,15 @@ function layoutGymYear(root, keepScroll){
     gymYearObserver._root = root;
   }
 }
-function historyGymCard(){
+function historyGymSummaryCard(logs, filter){
   const card = el(`
-    <div class="card">
+    <div class="card history-gym-card">
       <p class="section-title" style="margin-top:0;">Days in the gym</p>
+      <div data-gym></div>
+      <div data-summary-host></div>
     </div>`);
-  card.appendChild(gymYearActivity());
+  q('[data-gym]', card).appendChild(gymYearActivity());
+  q('[data-summary-host]', card).appendChild(renderHistorySummaryCard(logs, filter));
   afterHistoryRender.push(()=> layoutGymYear(q('.gym-year', card)));
   return card;
 }
@@ -3683,21 +3684,61 @@ function bindHistoryChart(canvas){
   canvas.onpointermove = pointAt;
   canvas.onpointerleave = ()=>{ tip.hidden = true; };
 }
-function historyRangeOptions(months){
-  return [
-    {value:'all', label:'All Time'},
-    {value:'this', label:'This Month'},
-    {value:'last', label:'Last Month'},
-    ...months.map(ym=>({value:ym, label:monthTitle(ym)}))
-  ];
+/* Sets logged in one calendar month, and who is behind the weekly target.
+   This month only counts days that have already arrived, so the first week
+   is not marked behind. A future month has not started. */
+function historyMonthWork(ym, logs){
+  const monthLogs = (logs||[]).filter(l=> l.date && l.date.slice(0,7)===ym);
+  const sets = monthLogs.flatMap(l=> l.sets||[]);
+  const muscles = muscleWorkForSets(sets).filter(r=> r.effectiveSets>=0.2).slice(0,8);
+  const peak = muscles.length ? Math.max(...muscles.map(r=> r.effectiveSets), 1) : 1;
+  const today = todayKey();
+  const start = ym+'-01';
+  const last = ym+'-'+String(daysInMonth(ym)).padStart(2,'0');
+  const end = ym>thisMonthKey() ? '' : ym===thisMonthKey() ? today : last;
+  let underNote = '';
+  if(end && end>=start && muscles.length){
+    const weeks = daysInclusive(start, end)/7;
+    if(weeks>=1){
+      const weeklyTarget = TRAINING.weeklyEffectiveSetTarget;
+      const under = muscles.filter(r=> (r.effectiveSets/weeks) < weeklyTarget*0.5).slice(0,2).map(r=> r.muscle);
+      if(under.length) underNote = under.join(' and ')+(under.length===1?' is':' are')+' well under the weekly target.';
+    }
+  }
+  const rows = muscles.length
+    ? historyMuscleRowsHtml(muscles, peak)
+    : '<p class="faint small" data-empty-pulse>No muscle work.</p>';
+  return {rows, underNote};
 }
-function historyRangeLabel(value, months){
-  const hit = historyRangeOptions(months).find(o=>o.value===value);
-  return hit ? hit.label : 'All Time';
-}
-function historyRangeSelectHtml(months){
-  const cur = historyFilter || 'all';
-  return choiceFieldHtml({id:'historyRange', label:null, value:cur, display:historyRangeLabel(cur, months)});
+function historyMonthSummaryCard(ym, logs){
+  const kpi = gymMonthKpis(ym);
+  const work = historyMonthWork(ym, logs);
+  return el(`
+    <div class="history-summary" data-history-summary>
+      <div class="history-day-head">
+        <div class="history-day-top">
+          <div class="recent-main">
+            <div class="nm">${escapeHtml(monthTitle(ym))}</div>
+          </div>
+          <div class="history-day-actions">
+            <button type="button" class="btn ghost history-day-clear" data-clear-month aria-label="Clear month">${icon('x',16)}</button>
+          </div>
+        </div>
+      </div>
+      <div class="history-day-body">
+        ${statGridHtml([
+          {value:`${kpi.count}<span class="stat-of">/${kpi.days}</span>`, label:'Workout days'},
+          {value:escapeHtml(kpi.rate), label:'Consistency'},
+          {value:escapeHtml(kpi.deltaText), label:'vs '+kpi.prevName},
+          {value:String(kpi.streak), label:'Longest streak'}
+        ], 'cols-2')}
+        <div class="history-muscles">
+          <p class="small muted">Muscle targeting</p>
+          ${work.rows}
+          ${work.underNote?`<p class="faint small">${escapeHtml(work.underNote)}</p>`:''}
+        </div>
+      </div>
+    </div>`);
 }
 function renderHistorySummaryCard(logs, filter){
   if(historyDay){
@@ -3705,64 +3746,29 @@ function renderHistorySummaryCard(logs, filter){
     bindHistorySummaryCard(card, logs, filter);
     return card;
   }
+  if(historyMonth){
+    const card = historyMonthSummaryCard(historyMonth, logs);
+    bindHistorySummaryCard(card, logs, filter);
+    return card;
+  }
   const insight = historyInsights(logs, filter);
   const range = historyRangeKpis(logs, filter);
   const card = el(`
-    <div class="card" data-history-summary>
-      <p class="section-title" style="margin-top:0;" data-type-title>Workout summary</p>
-      <div class="field" style="margin:0 0 12px;">${historyRangeSelectHtml(historyMonthOptions(loggedWorkouts()))}</div>
+    <div class="history-summary" data-history-summary>
       ${statGridHtml([
         {value:range.score==null ? '—' : `${range.score}<span class="stat-of">/100</span>`, label:'Score', infoHtml:`<button type="button" class="stat-info" data-score-info aria-label="How the score is measured">${icon('info',13)}</button>`},
         {value:escapeHtml(range.vs.text), label:'Vs previous', infoHtml:`<button type="button" class="stat-info" data-gain-info aria-label="Weight change by exercise">${icon('info',13)}</button>`},
         {value:String(insight.prs), label:'Records'},
         {value:String(insight.streak), label:'Streak'}
       ], 'cols-2')}
-      <div style="margin-top:14px;">
-        <p class="small muted" style="margin-bottom:4px;">Muscle targeting</p>
-        ${historyMuscleRowsHtml(insight.muscles, insight.muscleTarget)}
-        ${insight.underNote?`<p class="faint small" style="margin-top:8px;">${escapeHtml(insight.underNote)}</p>`:''}
+      <div class="history-muscles">
+        <p class="small muted">Muscle targeting</p>
+        ${historyMuscleRowsHtml(insight.muscles, insight.musclePeak)}
+        ${insight.underNote?`<p class="faint small">${escapeHtml(insight.underNote)}</p>`:''}
       </div>
     </div>`);
   bindHistorySummaryCard(card, logs, filter);
   return card;
-}
-function historyWorkoutRow(log){
-  const d = parseDateKey(log.date);
-  const when = `${d.getDate()} ${d.toLocaleDateString(undefined,{month:'short'})}, ${d.toLocaleDateString(undefined,{weekday:'short'})}`;
-  const dayName = log.planName || (splitDays()[log.dayKey||weekdayKey(d)]||{}).name || '';
-  const dur = sessionDurationMs(log);
-  const row = el(`
-    <div class="hist-day" style="cursor:pointer;">
-      <strong>${escapeHtml(when)}</strong>${dayName?` · ${escapeHtml(dayName)}`:''} ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
-      <div class="faint small">${workingSetCount(log.sets)}\u00a0sets · ≈\u00a0${roundTo(totalEffectiveSets(log.sets))}\u00a0effective${dur>0?` · ${formatDuration(dur)}`:''}</div>
-    </div>`);
-  row.onclick = ()=> openHistoryDaySheet(log.date);
-  return row;
-}
-function recentWorkoutRow(log, isLatest){
-  const d = parseDateKey(log.date);
-  const dayName = log.planName || (splitDays()[log.dayKey||weekdayKey(d)]||{}).name || 'Workout';
-  const dur = sessionDurationMs(log);
-  const ago = daysInclusive(log.date, todayKey()) - 1;
-  const when = ago===0 ? 'Today' : ago===1 ? 'Yesterday' : d.toLocaleDateString(undefined,{weekday:'long'});
-  const row = el(`
-    <div class="recent-row">
-      <div class="date-tile${isLatest?' latest':''}">
-        <span class="dd">${d.getDate()}</span>
-        <span class="mm">${escapeHtml(d.toLocaleDateString(undefined,{month:'short'}))}</span>
-      </div>
-      <div class="recent-main">
-        <div class="nm">${escapeHtml(dayName)}</div>
-        <div class="faint small">${escapeHtml(when)} · ${workingSetCount(log.sets)}\u00a0sets · ≈\u00a0${roundTo(totalEffectiveSets(log.sets))}\u00a0effective${dur>0?` · ${escapeHtml(formatDuration(dur))}`:''}</div>
-      </div>
-      ${log.sets.some(s=>s.isPR)?'<span class="trophy">🏆</span>':''}
-      <span class="recent-go">${icon('chevronRight',18)}</span>
-    </div>`);
-  row.onclick = ()=> openHistoryDaySheet(log.date);
-  return row;
-}
-function appendHistoryDays(parent, logs){
-  logs.forEach(log=> parent.appendChild(historyWorkoutRow(log)));
 }
 function renderHistoryGroups(parent, logs, spec){
   const openState = spec.open || historyTreeOpen;
@@ -3782,112 +3788,82 @@ function renderHistoryGroups(parent, logs, spec){
     }
   });
 }
-function renderHistoryWeekLevel(parent, logs){
-  renderHistoryGroups(parent, logs, {
-    level:'week', keyOf:l=>weekStartKey(l.date), title:g=>weekTitle(g.key), below:appendHistoryDays
-  });
-}
-function renderHistoryMonthLevel(parent, logs, titled){
-  renderHistoryGroups(parent, logs, {
-    level:'month', keyOf:l=>l.date.slice(0,7),
-    title:g=> titled ? monthNameOnly(g.key) : monthTitle(g.key),
-    below:renderHistoryWeekLevel, clear:['week']
-  });
-}
-function renderHistoryWorkoutTree(logs){
-  const box = el(`<div class="card hist-tree"></div>`);
-  renderHistoryGroups(box, logs, {
-    level:'year', keyOf:l=>l.date.slice(0,4), title:g=>g.key,
-    below:(p, rows)=> renderHistoryMonthLevel(p, rows, true),
-    skipBelow:(p, rows)=> renderHistoryMonthLevel(p, rows, false),
-    clear:['month','week']
-  });
-  return box;
-}
 function renderHistoryScreen(){
   historyFilter = normalizeHistoryFilter(historyFilter);
   const wrap = el(`<div></div>`);
-  const allLogs = loggedWorkouts();
-  wrap.appendChild(el(`<h3 style="margin-bottom:14px;">History</h3>`));
+  const logs = loggedWorkouts().filter(l=>workoutInHistoryFilter(l, historyFilter));
   wrap.appendChild(renderBodyWeightCard());
-  wrap.appendChild(historyGymCard());
-
-  const logs = allLogs.filter(l=>workoutInHistoryFilter(l, historyFilter));
-  if(!allLogs.length){
-    wrap.appendChild(renderHistorySummaryCard(logs, historyFilter));
-    wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
-    wrap.appendChild(el(`<div class="card"><p class="empty">No workouts logged yet. Head to Home and start your first session.</p></div>`));
-    return wrap;
-  }
-
-  wrap.appendChild(renderHistorySummaryCard(logs, historyFilter));
-  wrap.appendChild(el(`<div class="section-title">Recent workouts</div>`));
-  if(!logs.length){
-    wrap.appendChild(el(`<div class="card"><p class="empty">No workouts recorded for this month.</p></div>`));
-    return wrap;
-  }
-  const recent = logs.slice(0,3), past = logs.slice(3);
-  const recentCard = el(`<div class="card recent-card"></div>`);
-  recent.forEach((log,i)=> recentCard.appendChild(recentWorkoutRow(log, i===0)));
-  wrap.appendChild(recentCard);
-  if(past.length){
-    const toggle = el(`
-      <button class="btn secondary past-toggle">
-        <span>${pastWorkoutsOpen ? 'Hide past workouts' : `Past workouts (${past.length})`}</span>
-        ${icon(pastWorkoutsOpen ? 'chevronUp' : 'chevronDown', 18)}
-      </button>`);
-    toggle.onclick = ()=>{ pastWorkoutsOpen = !pastWorkoutsOpen; renderApp(); };
-    wrap.appendChild(toggle);
-    if(pastWorkoutsOpen) wrap.appendChild(renderHistoryWorkoutTree(past));
-  }
+  wrap.appendChild(historyGymSummaryCard(logs, historyFilter));
   return wrap;
 }
-function bodyWeightRow(entry){
-  const row = el(`
-    <div class="hist-day" style="cursor:pointer;">
-      <div class="row between">
-        <div>
-          <strong>${escapeHtml(formatBodyWeightLine(entry))}</strong>
-          ${entry.note?`<div class="faint small">${escapeHtml(entry.note)}</div>`:''}
-        </div>
-        <button class="btn danger" data-del title="Delete">✕</button>
+function bodyWeightTileHtml(date){
+  const d = parseDateKey(date);
+  return `<div class="date-tile"><span class="dd">${d.getDate()}</span><span class="mm">${escapeHtml(d.toLocaleDateString(undefined,{month:'short'}))}</span></div>`;
+}
+function bodyWeightDeltaText(newer, older){
+  if(!older) return '';
+  const delta = roundTo(newer.weight - older.weight, 1);
+  if(delta===0) return '0 kg';
+  return `${delta>0?'+':'-'}${formatBodyWeightKg(Math.abs(delta))} kg`;
+}
+function bodyWeightLogRow(entry, older){
+  const delta = bodyWeightDeltaText(entry, older);
+  const row = el(`<div class="bw-log-row"></div>`);
+  const open = el(`
+    <button type="button" class="bw-log-open">
+      ${bodyWeightTileHtml(entry.date)}
+      <div class="bw-log-main">
+        <div class="bw-log-val">${escapeHtml(formatBodyWeightKg(entry.weight))}<span class="unit">kg</span></div>
+        ${entry.note?`<div class="bw-log-note">${escapeHtml(entry.note)}</div>`:''}
       </div>
-    </div>`);
-  row.onclick = ()=> openLogWeightSheet(entry);
-  q('[data-del]',row).onclick = (event)=>{
+      ${delta?`<div class="bw-log-delta">${escapeHtml(delta)}</div>`:''}
+    </button>`);
+  open.onclick = ()=> openLogWeightSheet(entry);
+  const del = el(`<button type="button" class="btn ghost bw-log-del" aria-label="Delete weigh-in">${icon('trash',16)}</button>`);
+  del.onclick = (event)=>{
     event.stopPropagation();
     confirmAction('Delete this weigh-in?', 'Delete', ()=>{
       deleteBodyWeightEntry(entry.id);
       renderApp();
     });
   };
+  row.appendChild(open);
+  row.appendChild(del);
   return row;
 }
-function appendBodyWeightDays(parent, entries){
-  entries.forEach(entry=> parent.appendChild(bodyWeightRow(entry)));
-}
-function renderWeightWeekLevel(parent, entries){
-  renderHistoryGroups(parent, entries, {
-    level:'week', keyOf:e=>weekStartKey(e.date), title:g=>weekTitle(g.key),
-    below:appendBodyWeightDays, open:weightTreeOpen, unit:'weigh-in'
+function renderBodyWeightLog(past){
+  const list = el(`<div class="bw-log"></div>`);
+  const groups = [];
+  const byMonth = new Map();
+  past.forEach((entry, i)=>{
+    const ym = entry.date.slice(0,7);
+    let group = byMonth.get(ym);
+    if(!group){
+      group = {ym, rows:[]};
+      byMonth.set(ym, group);
+      groups.push(group);
+    }
+    group.rows.push({entry, older:past[i+1] || null});
   });
-}
-function renderWeightMonthLevel(parent, entries, titled){
-  renderHistoryGroups(parent, entries, {
-    level:'month', keyOf:e=>e.date.slice(0,7),
-    title:g=> titled ? monthNameOnly(g.key) : monthTitle(g.key),
-    below:renderWeightWeekLevel, clear:['week'], open:weightTreeOpen, unit:'weigh-in'
+  groups.forEach(group=>{
+    const open = weightLogMonths.has(group.ym);
+    const head = el(`
+      <button type="button" class="bw-log-month" aria-expanded="${open?'true':'false'}">
+        <span>${escapeHtml(monthTitle(group.ym))}</span>
+        <span class="meta">${group.rows.length} ${icon(open?'chevronUp':'chevronDown',16)}</span>
+      </button>`);
+    head.onclick = ()=>{
+      if(weightLogMonths.has(group.ym)) weightLogMonths.delete(group.ym);
+      else weightLogMonths.add(group.ym);
+      renderApp();
+    };
+    list.appendChild(head);
+    if(!open) return;
+    const rows = el(`<div class="bw-log-rows"></div>`);
+    group.rows.forEach(item=> rows.appendChild(bodyWeightLogRow(item.entry, item.older)));
+    list.appendChild(rows);
   });
-}
-function renderBodyWeightTree(entries){
-  const box = el(`<div class="hist-tree" style="margin-top:8px;padding-left:0;padding-right:0;"></div>`);
-  renderHistoryGroups(box, entries, {
-    level:'year', keyOf:e=>e.date.slice(0,4), title:g=>g.key,
-    below:(p, rows)=> renderWeightMonthLevel(p, rows, true),
-    skipBelow:(p, rows)=> renderWeightMonthLevel(p, rows, false),
-    clear:['month','week'], open:weightTreeOpen, unit:'weigh-in'
-  });
-  return box;
+  return list;
 }
 function renderBodyWeightCard(){
   const entries = sortedBodyWeight();
@@ -3925,10 +3901,18 @@ function renderBodyWeightCard(){
   q('[data-log]',card).onclick = ()=> openLogWeightSheet();
   if(past.length){
     const pastBox = q('[data-past]',card);
-    const toggle = el(`<button class="btn secondary" style="width:100%;margin-top:12px;">${weightLogOpen?'Hide past weigh-ins':'Past weigh-ins'}</button>`);
-    toggle.onclick = ()=>{ weightLogOpen = !weightLogOpen; renderApp(); };
+    const toggle = el(`
+      <button type="button" class="bw-log-toggle" aria-expanded="${weightLogOpen?'true':'false'}">
+        <span>Past weigh-ins</span>
+        <span class="meta">${past.length} ${icon(weightLogOpen?'chevronUp':'chevronDown',16)}</span>
+      </button>`);
+    toggle.onclick = ()=>{
+      weightLogOpen = !weightLogOpen;
+      if(weightLogOpen && !weightLogMonths.size) weightLogMonths.add(past[0].date.slice(0,7));
+      renderApp();
+    };
     pastBox.appendChild(toggle);
-    if(weightLogOpen) pastBox.appendChild(renderBodyWeightTree(past));
+    if(weightLogOpen) pastBox.appendChild(renderBodyWeightLog(past));
   }
   return card;
 }
@@ -3963,39 +3947,6 @@ function openLogWeightSheet(existing){
         showToast('Weight logged');
         renderApp();
       };
-    }
-  });
-}
-function openHistoryDaySheet(date){
-  const log = DATA.logs.find(l=>l.date===date);
-  let openEx = null;
-  openSheet({
-    title: formatLogDate(date),
-    build:(body)=>{
-      function draw(){
-        body.innerHTML = '';
-        const byExercise = {};
-        log.sets.forEach(set=>{ (byExercise[set.exerciseId] ||= []).push(set); });
-        Object.entries(byExercise).forEach(([exerciseId, sets])=>{
-          const ex = getExercise(exerciseId);
-          const isOpen = openEx === exerciseId;
-          const head = el(`
-            <div class="accordion-head" style="margin-bottom:${isOpen?'0':'10px'}">
-              <span style="font-weight:700;">${escapeHtml(ex?ex.name:'Unknown exercise')}</span>
-              <span class="faint small">${sets.length} set${sets.length===1?'':'s'} ${isOpen?'▲':'▼'}</span>
-            </div>`);
-          head.onclick = ()=>{ openEx = isOpen ? null : exerciseId; draw(); };
-          body.appendChild(head);
-          if(isOpen){
-            const box = el(`<div class="accordion-body" style="margin-bottom:10px;"></div>`);
-            setRowsInto(box, sets, metricOf(ex), {});
-            body.appendChild(box);
-          }
-        });
-        const work = muscleWorkCard(log.sets, 'Muscle work');
-        if(work) body.appendChild(work);
-      }
-      draw();
     }
   });
 }
@@ -4567,7 +4518,7 @@ function renderSettingsScreen(){
 
 const RESET_CATEGORIES = [
   {key:'history',  label:'Workout history', hint:'All logged sessions and sets. Also clears Stats PRs, which are built from this.'},
-  {key:'records',  label:'PR trophies on sets', hint:'Clears 🏆 flags. The Stats tab still lists best lifts unless you also clear Workout history.'},
+  {key:'records',  label:'PR trophies on sets', hint:'Clears the PR mark on sets. The Stats tab still lists best lifts unless you also clear Workout history.'},
   {key:'split',    label:'Split layout', hint:"Switches the week to a fresh God’s Plan. Other presets stay unless you clear those too."},
   {key:'weight',   label:'Weight logs', hint:'Body-weight entries in History.'},
   {key:'presets',  label:'Saved split presets', hint:'Clears your presets and puts God’s Plan, PPL, and PPL + UL back. The week switches to God’s Plan.'},
